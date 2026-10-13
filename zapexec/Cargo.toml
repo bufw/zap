@@ -1,0 +1,30 @@
+[package]
+name = "zapexec"
+version.workspace = true
+license.workspace = true
+edition = "2024"
+
+[dependencies]
+zap-proto = { path = "../zap-proto" }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+libc = "0.2"
+chrono = "0.4"
+serde_yaml = "0.9"
+zip = "2"
+# support tar.gz / tgz / tar.bz2
+tar = "0.4"
+flate2 = "1.0"
+zap-crypto = { path = "../zap-crypto" }
+# plugin HMAC-SHA256(zap-crypto , file hash)
+hmac = "0.12"
+sha2 = "0.10"
+bollard = "0.21.1"
+futures-util = "0.3"
+base64 = "0.22"
+mlua = { version = "0.9", features = ["lua54", "vendored"] }
+fs-err = { version = "3", features = ["tokio"] }

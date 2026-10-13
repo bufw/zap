@@ -1,0 +1,494 @@
+{
+  "title": "Zap 管理后台 API 文档",
+  "version": "0.1.1",
+  "base_path": "/api",
+  "auth_intro": [
+    "所有业务接口需要在请求头携带认证凭据： Authorization: Bearer <token>",
+    "支持两种凭据：1) 登录 /api/auth/login 获取的 JWT（短期有效，过期后重新登录或调用 /api/auth/reflash_token 刷新）；2) 长效 API Token（在“开发 → 管理 API Tokens”中创建，形如 zap_ 开头，可设置有效期，随时可吊销）。",
+    "不同角色可访问的接口范围不同：admin 拥有全部权限；reseller 管理自己的客户；user 管理自己的资源；demo（只读演示）仅允许 GET 浏览，写操作返回 403。",
+    "统一响应结构：{\"code\": 0, \"message\": \"OK\", \"data\": ...}；code 非 0 表示失败，message 为错误说明。",
+    "路径变量用 {name} 表示，调用时替换为实际值。"
+  ],
+  "groups": [
+    {
+      "name": "健康检查",
+      "description": "无需认证",
+      "endpoints": [
+        { "method": "GET", "path": "/health", "summary": "服务健康检查，返回版本与时间戳" }
+      ]
+    },
+    {
+      "name": "认证 Auth",
+      "description": "登录 / 登出 / 修改密码 / 两步验证（TOTP）",
+      "endpoints": [
+        { "method": "POST", "path": "/auth/login", "summary": "账号密码登录，成功后返回 JWT（含用户信息）", "params": [
+          { "name": "username", "type": "string", "required": true, "desc": "用户名" },
+          { "name": "password", "type": "string", "required": true, "desc": "密码" },
+          { "name": "totp_code", "type": "string", "required": false, "desc": "已开启 2FA 时必填的六位验证码" }
+        ] },
+        { "method": "GET", "path": "/auth/logout", "summary": "退出登录" },
+        { "method": "POST", "path": "/auth/reflash_token", "summary": "用现有 JWT 换取新的 JWT" },
+        { "method": "POST", "path": "/auth/change_password", "summary": "修改当前账号密码", "params": [
+          { "name": "old_password", "type": "string", "required": true, "desc": "原密码" },
+          { "name": "new_password", "type": "string", "required": true, "desc": "新密码（长度至少 6 位）" }
+        ] },
+        { "method": "GET", "path": "/auth/totp/setup", "summary": "获取 TOTP 密钥、二维码 URI 与人工输入密钥" },
+        { "method": "POST", "path": "/auth/totp/verify", "summary": "校验验证码并开启两步验证", "params": [
+          { "name": "code", "type": "string", "required": true, "desc": "认证器 App 上显示的六位验证码" }
+        ] },
+        { "method": "POST", "path": "/auth/totp/disable", "summary": "关闭两步验证" },
+        { "method": "GET", "path": "/auth/totp/status", "summary": "查询两步验证是否已开启" },
+        { "method": "GET", "path": "/user/info", "summary": "当前登录用户资料" }
+      ]
+    },
+    {
+      "name": "用户管理",
+      "description": "admin / reseller 创建与管理客户账号",
+      "endpoints": [
+        { "method": "GET", "path": "/system/user/list", "summary": "用户分页列表", "params": [
+          { "name": "page", "type": "int", "required": false, "desc": "页码，默认 1" },
+          { "name": "page_size", "type": "int", "required": false, "desc": "每页条数，默认 20" },
+          { "name": "keyword", "type": "string", "required": false, "desc": "按用户名 / 昵称模糊搜索" }
+        ] },
+        { "method": "POST", "path": "/system/user/add", "summary": "新增用户", "params": [
+          { "name": "username", "type": "string", "required": true, "desc": "用户名" },
+          { "name": "password", "type": "string", "required": true, "desc": "初始密码" },
+          { "name": "role", "type": "string", "required": true, "desc": "角色：admin / reseller / user" }
+        ] },
+        { "method": "POST", "path": "/system/user/update", "summary": "修改用户（昵称 / 状态 / 角色 / 重置密码等）" },
+        { "method": "POST", "path": "/system/user/delete", "summary": "删除用户" },
+        { "method": "GET", "path": "/system/user/resellers", "summary": "经销商账号列表（用于选择上级）" }
+      ]
+    },
+    {
+      "name": "角色管理",
+      "description": "admin 专属",
+      "endpoints": [
+        { "method": "GET", "path": "/system/role/list", "summary": "角色列表" },
+        { "method": "POST", "path": "/system/role/add", "summary": "新增角色" },
+        { "method": "POST", "path": "/system/role/update", "summary": "修改角色" },
+        { "method": "POST", "path": "/system/role/delete", "summary": "删除角色" },
+        { "method": "GET", "path": "/system/role/permissions", "summary": "查询角色已分配权限（菜单）" },
+        { "method": "POST", "path": "/system/role/permissions/set", "summary": "给角色分配权限（菜单 ID 列表）" }
+      ]
+    },
+    {
+      "name": "菜单管理",
+      "description": "admin 专属；前端导航 / 路由由该数据动态生成",
+      "endpoints": [
+        { "method": "GET", "path": "/system/menus/tree", "summary": "菜单树（登录后用于渲染侧边栏）" },
+        { "method": "GET", "path": "/system/menus/list", "summary": "菜单列表" },
+        { "method": "POST", "path": "/system/menus/add", "summary": "新增菜单" },
+        { "method": "POST", "path": "/system/menus/update", "summary": "修改菜单" },
+        { "method": "POST", "path": "/system/menus/delete", "summary": "删除菜单" },
+        { "method": "POST", "path": "/system/menus/status", "summary": "启用 / 停用菜单" }
+      ]
+    },
+    {
+      "name": "服务器时间 / 网络",
+      "description": "admin 专属",
+      "endpoints": [
+        { "method": "GET", "path": "/system/config/time", "summary": "查询系统当前时间与时区" },
+        { "method": "POST", "path": "/system/config/time/sync", "summary": "NTP 时间同步" },
+        { "method": "POST", "path": "/system/config/time/timezone", "summary": "设置时区" },
+        { "method": "GET", "path": "/system/config/time/timezones", "summary": "可用时区列表" },
+        { "method": "GET", "path": "/system/config/network", "summary": "查询主机名 / DNS 配置" },
+        { "method": "POST", "path": "/system/config/network/hostname", "summary": "修改主机名" },
+        { "method": "POST", "path": "/system/config/network/resolver", "summary": "修改 DNS 解析器" }
+      ]
+    },
+    {
+      "name": "IP 池管理",
+      "description": "admin 专属；维护可分配 / 保留的 IP 资源",
+      "endpoints": [
+        { "method": "GET", "path": "/system/ip/list", "summary": "IP 池分页列表" },
+        { "method": "POST", "path": "/system/ip/add", "summary": "批量新增 IP（支持网段/范围展开）", "params": [
+          { "name": "addresses", "type": "string[]", "required": true, "desc": "IP 或 网段（如 1.1.1.0/24）" },
+          { "name": "remark", "type": "string", "required": false, "desc": "备注" }
+        ] },
+        { "method": "POST", "path": "/system/ip/delete", "summary": "删除 IP" },
+        { "method": "POST", "path": "/system/ip/update", "summary": "修改 IP（备注等）" },
+        { "method": "POST", "path": "/system/ip/batch-reserved", "summary": "批量设置保留 / 取消保留" }
+      ]
+    },
+    {
+      "name": "系统服务与进程",
+      "description": "admin 专属",
+      "endpoints": [
+        { "method": "GET", "path": "/system/config/services", "summary": "systemd 服务列表与状态" },
+        { "method": "POST", "path": "/system/config/services/action", "summary": "服务操作：start / stop / restart / enable / disable" },
+        { "method": "GET", "path": "/system/config/processes", "summary": "进程列表（含 CPU / 内存）" },
+        { "method": "POST", "path": "/system/config/processes/kill", "summary": "结束进程", "params": [
+          { "name": "pid", "type": "int", "required": true, "desc": "进程 PID" }
+        ] }
+      ]
+    },
+    {
+      "name": "SSH 服务与密钥",
+      "description": "admin 专属",
+      "endpoints": [
+        { "method": "GET", "path": "/system/config/ssh/status", "summary": "SSH 服务状态与端口" },
+        { "method": "POST", "path": "/system/config/ssh/restart", "summary": "重启 SSH 服务" },
+        { "method": "POST", "path": "/system/config/ssh/install", "summary": "安装 / 配置 SSH（密钥登录等）" },
+        { "method": "GET", "path": "/system/config/ssh/install/log/{run_id}", "summary": "安装任务日志" },
+        { "method": "GET", "path": "/system/config/ssh/keys", "summary": "本机 SSH 密钥对列表" },
+        { "method": "GET", "path": "/system/config/ssh/keys/content", "summary": "查看密钥对公钥 / 私钥内容" },
+        { "method": "POST", "path": "/system/config/ssh/keys/generate", "summary": "生成新的密钥对" },
+        { "method": "POST", "path": "/system/config/ssh/keys/import", "summary": "导入密钥对" },
+        { "method": "POST", "path": "/system/config/ssh/keys/delete", "summary": "删除密钥对" },
+        { "method": "GET", "path": "/system/config/ssh/authorized_keys", "summary": "authorized_keys 授权列表" },
+        { "method": "POST", "path": "/system/config/ssh/authorize", "summary": "将公钥加入 authorized_keys" },
+        { "method": "POST", "path": "/system/config/ssh/deauthorize", "summary": "从 authorized_keys 移除公钥" }
+      ]
+    },
+    {
+      "name": "SSH 终端（连接管理）",
+      "description": "保存的主机连接；页面内嵌 Web 终端",
+      "endpoints": [
+        { "method": "GET", "path": "/terminal/connections", "summary": "已保存的连接列表" },
+        { "method": "GET", "path": "/terminal/connections/{id}", "summary": "连接详情" },
+        { "method": "POST", "path": "/terminal/connections/create", "summary": "新增连接（主机 / 端口 / 认证方式等）" },
+        { "method": "POST", "path": "/terminal/connections/{id}/update", "summary": "修改连接" },
+        { "method": "POST", "path": "/terminal/connections/{id}/delete", "summary": "删除连接" },
+        { "method": "GET", "path": "/terminal/connections/test", "summary": "测试连接连通性" },
+        { "method": "POST", "path": "/terminal/connections/{id}/push-key", "summary": "推送本机公钥到目标主机" },
+        { "method": "POST", "path": "/terminal/push-key", "summary": "按表单参数直推公钥（连接无需先保存）" },
+        { "method": "WS", "path": "/terminal/ws/{id}", "summary": "WebSocket 终端通道（使用 query 携带 JWT；record=0 可关闭会话录制）" },
+        { "method": "GET", "path": "/terminal/sftp/list", "summary": "SFTP 列目录（复用终端连接）" },
+        { "method": "GET", "path": "/terminal/sftp/download", "summary": "SFTP 下载文件（base64）" },
+        { "method": "POST", "path": "/terminal/sftp/upload", "summary": "SFTP 上传文件（base64）" },
+        { "method": "POST", "path": "/terminal/sftp/mkdir", "summary": "SFTP 新建目录" },
+        { "method": "POST", "path": "/terminal/sftp/remove", "summary": "SFTP 删除文件/目录" },
+        { "method": "POST", "path": "/terminal/sftp/rename", "summary": "SFTP 重命名/移动" },
+        { "method": "GET", "path": "/terminal/recordings", "summary": "会话录制列表（按用户隔离）" },
+        { "method": "GET", "path": "/terminal/recordings/{id}", "summary": "取回一条录制（asciinema cast 文本，供回放）" },
+        { "method": "POST", "path": "/terminal/recordings/{id}/delete", "summary": "删除一条会话录制" }
+      ]
+    },
+    {
+      "name": "系统状态与审计",
+      "description": "监控大盘 / 操作审计",
+      "endpoints": [
+        { "method": "GET", "path": "/system/info", "summary": "主机基础信息（CPU / 内存 / 磁盘 / 网络等）" },
+        { "method": "GET", "path": "/system/status", "summary": "运行状态快照与历史曲线数据", "params": [{ "name": "range", "type": "string", "required": false, "desc": "时间范围：live（默认，近 5 分钟原始点）/ 1h / 6h / 24h / 7d / 30d（按时间桶 AVG 降采样，返回 ~120-180 点）" } ] },
+        { "method": "GET", "path": "/system/overview", "summary": "大盘概览（图表数据源）" },
+        { "method": "GET", "path": "/system/job/stop", "summary": "停止监控采集任务" },
+        { "method": "GET", "path": "/system/job/start", "summary": "启动监控采集任务" },
+        { "method": "GET", "path": "/system/audit/list", "summary": "操作审计日志（分页 / 按动作与用户过滤）" }
+      ]
+    },
+    {
+      "name": "文件管理",
+      "description": "浏览服务器文件系统",
+      "endpoints": [
+        { "method": "GET", "path": "/system/files/list", "summary": "目录列表", "params": [
+          { "name": "path", "type": "string", "required": true, "desc": "目录绝对路径" }
+        ] },
+        { "method": "GET", "path": "/system/files/read", "summary": "读取文本文件内容" },
+        { "method": "POST", "path": "/system/files/write", "summary": "写入文本文件" },
+        { "method": "POST", "path": "/system/files/delete", "summary": "删除文件 / 目录" },
+        { "method": "POST", "path": "/system/files/mkdir", "summary": "新建目录" },
+        { "method": "POST", "path": "/system/files/rename", "summary": "重命名 / 移动" },
+        { "method": "GET", "path": "/system/files/download", "summary": "下载文件（二进制流）" },
+        { "method": "POST", "path": "/system/files/upload", "summary": "上传文件（multipart）" },
+        { "method": "GET", "path": "/system/files/info", "summary": "单个文件详情" },
+        { "method": "GET", "path": "/system/files/dir_size", "summary": "计算目录（递归）大小", "params": [
+          { "name": "path", "type": "string", "required": true, "desc": "目录绝对路径" }
+        ] }
+      ]
+    },
+    {
+      "name": "应用商店 AppStore",
+      "description": "Git 源应用 / 脚本安装、运行与日志",
+      "endpoints": [
+        { "method": "GET", "path": "/appstore/repos", "summary": "Git 仓库源列表" },
+        { "method": "POST", "path": "/appstore/repos/add", "summary": "新增仓库源" },
+        { "method": "POST", "path": "/appstore/repos/remove", "summary": "移除仓库源" },
+        { "method": "POST", "path": "/appstore/repos/update", "summary": "更新仓库源配置" },
+        { "method": "GET", "path": "/appstore/packages", "summary": "可安装应用 / 包列表" },
+        { "method": "POST", "path": "/appstore/install", "summary": "安装应用" },
+        { "method": "POST", "path": "/appstore/uninstall", "summary": "卸载应用" },
+        { "method": "POST", "path": "/appstore/upgrade", "summary": "升级应用" },
+        { "method": "GET", "path": "/appstore/scripts/tree", "summary": "脚本文件树" },
+        { "method": "GET", "path": "/appstore/script/read", "summary": "读取脚本内容" },
+        { "method": "POST", "path": "/appstore/script/write", "summary": "保存脚本" },
+        { "method": "POST", "path": "/appstore/script/run", "summary": "运行脚本 / 安装任务" },
+        { "method": "POST", "path": "/appstore/script/stop", "summary": "停止运行中的任务" },
+        { "method": "GET", "path": "/appstore/runs", "summary": "历史运行记录" },
+        { "method": "GET", "path": "/appstore/log/{run_id}", "summary": "运行日志" },
+        { "method": "WS", "path": "/appstore/ws/{run_id}", "summary": "WebSocket 实时日志流" }
+      ]
+    },
+    {
+      "name": "插件 Plugin",
+      "description": "Lua 插件的安装 / 卸载、列表与运行；权限点 plugin:view / run / install / uninstall",
+      "endpoints": [
+        { "method": "GET", "path": "/plugin/list", "summary": "插件列表（统一在系统级 $ZAP_PATH/plugins）", "params": [
+          { "name": "slot", "type": "string", "required": false, "desc": "按 ui.placement 槽位过滤，如 site.detail；留空返回全部" },
+          { "name": "scope", "type": "string", "required": false, "desc": "按运行作用域过滤：site / system" }
+        ] },
+        { "method": "GET", "path": "/plugin/ui", "summary": "读取插件自带的 HTML 界面内容（前端塞进沙箱 iframe 渲染）", "params": [
+          { "name": "name", "type": "string", "required": true, "desc": "插件名" },
+          { "name": "level", "type": "string", "required": false, "desc": "user（默认）/ system" }
+        ] },
+        { "method": "POST", "path": "/plugin/run", "summary": "运行插件（异步插件返回 task_id + log_path）", "params": [
+          { "name": "name", "type": "string", "required": true, "desc": "插件名（目录名）" },
+          { "name": "action", "type": "string", "required": false, "desc": "manifest.actions 里的动作键，缺省 run" },
+          { "name": "site_id", "type": "number", "required": false, "desc": "scope=site 插件必填，用于解析站点 root 与 Linux 账号" },
+          { "name": "options", "type": "object", "required": false, "desc": "运行选项，键为 manifest.options 里的 name" }
+        ] },
+        { "method": "POST", "path": "/plugin/install", "summary": "上传插件包安装（multipart：level / force / name / file）", "params": [
+          { "name": "level", "type": "string", "required": false, "desc": "user（默认，登录用户可装）/ system（仅管理员）" },
+          { "name": "force", "type": "string", "required": false, "desc": "true 时覆盖同名插件" },
+          { "name": "name", "type": "string", "required": false, "desc": "插件名，留空取 manifest 里的 name" },
+          { "name": "file", "type": "file", "required": true, "desc": "插件包：.zip / .tar.gz / .tgz / .tar" }
+        ] },
+        { "method": "POST", "path": "/plugin/install-git", "summary": "从 Git 仓库安装插件", "params": [
+          { "name": "url", "type": "string", "required": true, "desc": "仓库地址：http(s):// / ssh:// / git@" },
+          { "name": "level", "type": "string", "required": false, "desc": "user（默认）/ system（仅管理员）" },
+          { "name": "git_ref", "type": "string", "required": false, "desc": "分支 / 标签，留空用默认分支" },
+          { "name": "name", "type": "string", "required": false, "desc": "插件名，留空取 manifest 里的 name" },
+          { "name": "force", "type": "bool", "required": false, "desc": "覆盖同名插件" }
+        ] },
+        { "method": "POST", "path": "/plugin/uninstall", "summary": "卸载插件（删除整个插件目录）", "params": [
+          { "name": "name", "type": "string", "required": true, "desc": "插件名" },
+          { "name": "level", "type": "string", "required": false, "desc": "user（默认）/ system（仅管理员）" }
+        ] },
+        { "method": "GET", "path": "/plugin/watch", "summary": "异步插件日志流（SSE，?token=&log_path=）" },
+        { "method": "POST", "path": "/plugin/cancel", "summary": "取消运行中的异步插件（写取消哨兵文件）", "params": [
+          { "name": "token", "type": "string", "required": true, "desc": "JWT（EventSource 不能带自定义头，故走参数）" },
+          { "name": "task_id", "type": "string", "required": true, "desc": "plugin/run 返回的 task_id" }
+        ] }
+      ]
+    },
+    {
+      "name": "站点管理",
+      "description": "一个站点可绑定多个域名与多个 IP；含站点同步、启停、安全（WAF / 限速）、日志与流量分析",
+      "endpoints": [
+        { "method": "GET", "path": "/site/list", "summary": "站点列表（可按关键词搜索域名 / IP）", "params": [
+          { "name": "search", "type": "string", "required": false, "desc": "关键词，匹配域名或 IP" },
+          { "name": "status", "type": "int", "required": false, "desc": "按启用状态过滤（0 / 1）" },
+          { "name": "user_id", "type": "int", "required": false, "desc": "按归属用户过滤（admin / reseller 用）" }
+        ] },
+        { "method": "GET", "path": "/site/users", "summary": "可选归属用户列表（admin / reseller 建站时选归属用户用）" },
+        { "method": "GET", "path": "/site/feature", "summary": "当前账号的站点能力：是否可用反代（proxy）、WAF、自定义目录" },
+        { "method": "GET", "path": "/site/loc-directives", "summary": "location 附加指令白名单（面板下拉项，与执行端校验同源）" },
+        { "method": "POST", "path": "/site/add", "summary": "新增站点", "params": [
+          { "name": "user_id", "type": "int", "required": false, "desc": "归属用户 ID；admin / reseller 必填，普通用户忽略（恒为自己）" },
+          { "name": "name", "type": "string", "required": false, "desc": "站点名称，留空默认取第一个域名" },
+          { "name": "domains", "type": "string[]", "required": true, "desc": "绑定的域名列表（可多个）" },
+          { "name": "ips", "type": "string[]", "required": false, "desc": "绑定的 IP 列表（可多个）" },
+          { "name": "site_type", "type": "string", "required": false, "desc": "站点类型：php（默认）/ static（纯静态）/ proxy（反向代理）" },
+          { "name": "php_instance", "type": "string", "required": false, "desc": "PHP 实例标识（appstore 已安装 PHP 应用的 instance，如 php74）；空 = 不绑定" },
+          { "name": "web_root_custom", "type": "bool", "required": false, "desc": "true = 使用归属用户家目录下已有自定义目录（需同时给 web_root）" },
+          { "name": "web_root", "type": "string", "required": false, "desc": "自定义站点目录绝对路径（web_root_custom=true 时必填）" },
+          { "name": "web_root_sub", "type": "string", "required": false, "desc": "自动目录自定义子路径（相对归属用户家目录，如 www/blog；空 = 面板默认规划）" },
+          { "name": "ssl_cert_id", "type": "int", "required": false, "desc": "绑定证书库证书 id；0 = 不启用 HTTPS" },
+          { "name": "force_https", "type": "bool", "required": false, "desc": "允许 HTTP 跳转 HTTPS（仅绑定证书后生效）" },
+          { "name": "remark", "type": "string", "required": false, "desc": "备注" }
+        ] },
+        { "method": "POST", "path": "/site/update", "summary": "修改站点（字段不传则保持原样，传入则整体覆盖；domains / ips / ssl_cert_id 传空或 0 表示清空 / 解绑）", "params": [
+          { "name": "id", "type": "int", "required": true, "desc": "站点 ID" },
+          { "name": "name", "type": "string", "required": false, "desc": "站点名称" },
+          { "name": "domains", "type": "string[]", "required": false, "desc": "整体覆盖域名；不传 = 不变；传空数组 = 清空" },
+          { "name": "ips", "type": "string[]", "required": false, "desc": "整体覆盖 IP" },
+          { "name": "run_state", "type": "string", "required": false, "desc": "运行状态：running / stopped / maintenance（与 status 同时传时以此为准）" },
+          { "name": "status", "type": "int", "required": false, "desc": "启用状态（0 / 1）" },
+          { "name": "php_instance", "type": "string", "required": false, "desc": "None = 不变；空串 = 清除 PHP 实例绑定" },
+          { "name": "site_type", "type": "string", "required": false, "desc": "站点类型（None = 不变）" },
+          { "name": "web_root_custom", "type": "bool", "required": false, "desc": "Some(true)=切到「选择已有目录」；Some(false)=切回面板自动目录" },
+          { "name": "web_root", "type": "string", "required": false, "desc": "自定义站点目录绝对路径（web_root_custom=true 且首次指定时必填）" },
+          { "name": "web_root_sub", "type": "string", "required": false, "desc": "自动目录自定义子路径（Some(非空) 时刷新为 {home}/{sub}）" },
+          { "name": "ssl_cert_id", "type": "int", "required": false, "desc": "None = 不变；Some(0) = 解绑证书；Some(id) = 绑定证书" },
+          { "name": "force_https", "type": "bool", "required": false, "desc": "允许 HTTP 跳转 HTTPS（None = 不变）" },
+          { "name": "sec", "type": "object", "required": false, "desc": "安全配置（WAF / 限速 / 限并发）；None = 不改动。结构见 /site/security/save" },
+          { "name": "remark", "type": "string", "required": false, "desc": "备注" }
+        ] },
+        { "method": "POST", "path": "/site/delete", "summary": "删除站点（级联清理域名 / IP 绑定；可选删除网站数据）", "params": [
+          { "name": "ids", "type": "int[]", "required": true, "desc": "站点 ID 列表（支持批量）" },
+          { "name": "remove_data", "type": "bool", "required": false, "desc": "true = 同时删除站点文档根（网站文件）与日志目录；false / 不传 = 只删配置，保留数据" }
+        ] },
+        { "method": "POST", "path": "/site/sync", "summary": "同步单个站点 vhost 配置（改完配置后让执行端生效）", "params": [
+          { "name": "id", "type": "int", "required": true, "desc": "站点 ID" }
+        ] },
+        { "method": "POST", "path": "/site/sync_all", "summary": "同步全部站点 vhost 配置（部署 / 迁移后批量生效用）" },
+        { "method": "POST", "path": "/site/state", "summary": "切换站点运行三态（同步 vhost：停止撤软链、维护发维护页）", "params": [
+          { "name": "id", "type": "int", "required": true, "desc": "站点 ID" },
+          { "name": "state", "type": "string", "required": true, "desc": "running（启动）/ stopped（停止）/ maintenance（维护页）" }
+        ] },
+        { "method": "POST", "path": "/site/dirs", "summary": "浏览归属用户家目录下的子目录（供「选择已有目录」用）", "params": [
+          { "name": "user_id", "type": "int", "required": false, "desc": "归属用户 id；admin / reseller 可指定他人，普通用户忽略（恒为自己）" },
+          { "name": "path", "type": "string", "required": false, "desc": "当前浏览目录（不传 = 家目录根），返回其下子目录" }
+        ] },
+        { "method": "GET", "path": "/site/security", "summary": "读取站点安全配置（WAF / 限速 / 限并发）+ 两项能力可用性", "params": [
+          { "name": "id", "type": "int", "required": true, "desc": "站点 ID" }
+        ] },
+        { "method": "POST", "path": "/site/security/save", "summary": "保存站点安全配置并立即同步 vhost（安全片段随配置生效）", "params": [
+          { "name": "id", "type": "int", "required": true, "desc": "站点 ID" },
+          { "name": "sec", "type": "object", "required": true, "desc": "安全配置对象：waf_enable(bool), waf_mode(0跟随全局/1拦截/2仅检测), waf_rules(string), waf_audit(bool), whitelist(string,IP/CIDR), limit_dry_run(bool), limit_req_enable(bool), limit_req_rate(u32每秒请求上限), limit_req_burst(u32突发放行), limit_conn_enable(bool), limit_conn_num(u32单IP并发上限)" }
+        ] },
+        { "method": "GET", "path": "/site/security/caps", "summary": "站点级 WAF 能力：全局是否就绪（waf_ready）、套餐是否允许（waf_allowed）与阻塞原因" },
+        { "method": "GET", "path": "/site/logs", "summary": "站点日志尾部行（当前日志或归档，支持关键词 / 状态码过滤）", "params": [
+          { "name": "id", "type": "int", "required": true, "desc": "站点 ID" },
+          { "name": "kind", "type": "string", "required": false, "desc": "日志类型：access / error；空 = 默认" },
+          { "name": "archive", "type": "string", "required": false, "desc": "归档文件名（来自 /site/logs/archives）；空 = 当前日志" },
+          { "name": "lines", "type": "int", "required": false, "desc": "返回行数，默认 200" },
+          { "name": "keyword", "type": "string", "required": false, "desc": "关键词过滤" },
+          { "name": "status", "type": "string", "required": false, "desc": "按 HTTP 状态码过滤（如 404 / 500）" }
+        ] },
+        { "method": "GET", "path": "/site/logs/archives", "summary": "当前日志与历史归档列表（供查看 / 下载历史）", "params": [
+          { "name": "id", "type": "int", "required": true, "desc": "站点 ID" }
+        ] },
+        { "method": "POST", "path": "/site/logs/clear", "summary": "清空站点当前日志", "params": [
+          { "name": "id", "type": "int", "required": true, "desc": "站点 ID" },
+          { "name": "kind", "type": "string", "required": false, "desc": "access / error；空 = 两者都清空" }
+        ] },
+        { "method": "POST", "path": "/site/logs/rotate", "summary": "手动轮转该站点日志（按天切割 + 归档）", "params": [
+          { "name": "id", "type": "int", "required": true, "desc": "站点 ID" }
+        ] },
+        { "method": "GET", "path": "/site/logs/audit", "summary": "按 unique_id 反查该站点 WAF 审计明细", "params": [
+          { "name": "id", "type": "int", "required": true, "desc": "站点 ID" },
+          { "name": "unique_id", "type": "string", "required": true, "desc": "WAF 审计日志里的 unique_id（高熵随机串）" }
+        ] },
+        { "method": "GET", "path": "/site/traffic", "summary": "站点流量分析（按天曲线 + Top URL + 汇总）", "params": [
+          { "name": "id", "type": "int", "required": true, "desc": "站点 ID" },
+          { "name": "days", "type": "int", "required": false, "desc": "统计天数，默认 30（0 视为 30，最大 365）" }
+        ] }
+      ]
+    },
+    {
+      "name": "域名站点应用管理",
+      "description": "域名站点下的应用（Application Manager）：能力 / 运行时查询、部署、重新部署、启停、移除与日志。均需 Bearer 鉴权且调用者对 site_id 有访问权",
+      "endpoints": [
+        { "method": "GET", "path": "/site/app/caps", "summary": "站点可部署的应用能力（套餐允许的 app_type 列表与端口段等）", "params": [
+          { "name": "site_id", "type": "int", "required": true, "desc": "站点 ID" }
+        ] },
+        { "method": "GET", "path": "/site/app/runtimes", "summary": "可用的运行时版本列表（python / nodejs / go 等及其可选项）" },
+        { "method": "GET", "path": "/site/app/list_all", "summary": "全部站点 + 应用清单（含 site_id / site_name / name / app_type / workdir），用于两级下拉" },
+        { "method": "GET", "path": "/site/app/list", "summary": "某个站点的应用列表", "params": [
+          { "name": "site_id", "type": "int", "required": true, "desc": "站点 ID" }
+        ] },
+        { "method": "POST", "path": "/site/app/deploy", "summary": "部署应用（创建 / 更新并构建；参数较多，适合首次上线或复杂配置）", "params": [
+          { "name": "site_id", "type": "int", "required": true, "desc": "站点 ID（与 domain 二选一）" },
+          { "name": "name", "type": "string", "required": true, "desc": "应用名（站点内唯一），仅字母数字 -_. 且 ≤48" },
+          { "name": "app_type", "type": "string", "required": true, "desc": "python / nodejs / go / static / generic 等（受套餐 caps.types 限制）" },
+          { "name": "runtime_version", "type": "string", "required": false, "desc": "运行时版本（如 3.11 / 20），空 = 系统默认" },
+          { "name": "build_cmd", "type": "string", "required": false, "desc": "部署时先执行的构建命令，空 = 不构建" },
+          { "name": "create_venv", "type": "bool", "required": false, "desc": "python：是否生成 .venv（默认开启）" },
+          { "name": "workdir", "type": "string", "required": false, "desc": "工作目录，空 = 站点 web_root" },
+          { "name": "entry", "type": "string", "required": false, "desc": "入口" },
+          { "name": "command", "type": "string", "required": false, "desc": "自定义启动命令（非空则覆盖类型默认模板；generic 必填）" },
+          { "name": "port", "type": "int", "required": false, "desc": "端口；配合 auto_port 可自动分配" },
+          { "name": "env", "type": "string", "required": false, "desc": "环境变量，每行一条 KEY=VALUE" },
+          { "name": "autostart", "type": "bool", "required": false, "desc": "是否开机 / 部署后自启（默认 true）" },
+          { "name": "install_deps", "type": "bool", "required": false, "desc": "是否安装依赖（pip / npm）" },
+          { "name": "auto_port", "type": "bool", "required": false, "desc": "自动分配端口（true 时忽略 port）" },
+          { "name": "domain", "type": "string", "required": false, "desc": "公开仓库地址（空 = 使用现有 workdir）；也可填域名自动建反向代理站点" },
+          { "name": "mount_path", "type": "string", "required": false, "desc": "站点上反代挂载前缀，默认 /" },
+          { "name": "match_mode", "type": "string", "required": false, "desc": "匹配方式：空=前缀 / exact=精确 / prefer=优先前缀" },
+          { "name": "strip_prefix", "type": "bool", "required": false, "desc": "是否剥离挂载前缀再转发" },
+          { "name": "repo_url", "type": "string", "required": false, "desc": "源代码公开仓库（空 = 使用现有 workdir）" },
+          { "name": "branch", "type": "string", "required": false, "desc": "分支（空 = 探测默认分支）" },
+          { "name": "git_ref", "type": "string", "required": false, "desc": "指定提交 / 标签（可选）" },
+          { "name": "git_subdir", "type": "string", "required": false, "desc": "仓库内子目录（应用根不在仓库根时用）" },
+          { "name": "git_depth", "type": "int", "required": false, "desc": "浅克隆深度（0 = 不浅克隆）" },
+          { "name": "build_output", "type": "string", "required": false, "desc": "静态型构建产物目录（相对 workdir；空 = 执行端自动探测）" }
+        ] },
+        { "method": "POST", "path": "/site/app/git-update", "summary": "拉取最新代码 + 重建 + 重启（即「应用重新部署」），最适合自动化", "params": [
+          { "name": "site_id", "type": "int", "required": true, "desc": "站点 ID" },
+          { "name": "name", "type": "string", "required": true, "desc": "应用名（站点内唯一）" }
+        ] },
+        { "method": "POST", "path": "/site/app/action", "summary": "对应用执行启停动作", "params": [
+          { "name": "site_id", "type": "int", "required": true, "desc": "站点 ID" },
+          { "name": "name", "type": "string", "required": true, "desc": "应用名" },
+          { "name": "action", "type": "string", "required": true, "desc": "start / stop / restart / enable / disable" }
+        ] },
+        { "method": "POST", "path": "/site/app/remove", "summary": "移除应用（停止并删除进程配置；可选删数据）", "params": [
+          { "name": "site_id", "type": "int", "required": true, "desc": "站点 ID" },
+          { "name": "name", "type": "string", "required": true, "desc": "应用名" }
+        ] },
+        { "method": "GET", "path": "/site/app/log", "summary": "应用运行日志尾部（stdout / stderr）", "params": [
+          { "name": "site_id", "type": "int", "required": true, "desc": "站点 ID" },
+          { "name": "name", "type": "string", "required": true, "desc": "应用名" },
+          { "name": "lines", "type": "int", "required": false, "desc": "返回行数，默认 200" }
+        ] }
+      ]
+    },
+    {
+      "name": "开发（API Token）",
+      "description": "本组接口即本页面数据来源",
+      "endpoints": [
+        { "method": "GET", "path": "/dev/api-token/list", "summary": "当前账号的 API Token 列表（只含前缀，不返回完整值）" },
+        { "method": "POST", "path": "/dev/api-token/create", "summary": "新建 API Token；完整值仅创建响应中返回一次", "params": [
+          { "name": "name", "type": "string", "required": false, "desc": "备注名称" },
+          { "name": "expire_days", "type": "int", "required": false, "desc": "有效期天数，缺省 / 0 表示永不过期" }
+        ] },
+        { "method": "POST", "path": "/dev/api-token/update", "summary": "修改备注或启停用", "params": [
+          { "name": "id", "type": "int", "required": true, "desc": "Token ID" },
+          { "name": "name", "type": "string", "required": false, "desc": "新备注" },
+          { "name": "status", "type": "int", "required": false, "desc": "1 启用 / 0 停用" }
+        ] },
+        { "method": "POST", "path": "/dev/api-token/delete", "summary": "吊销（删除）API Token", "params": [
+          { "name": "id", "type": "int", "required": true, "desc": "Token ID" }
+        ] },
+        { "method": "GET", "path": "/dev/api-docs", "summary": "API 文档数据（当前页面）" }
+      ]
+    },
+    {
+      "name": "SSL/TLS（证书管理）",
+      "description": "SSL 证书（crt / key / ca-bundle / csr）的导入、自签名生成与 Let's Encrypt 自动申请",
+      "endpoints": [
+        { "method": "GET", "path": "/ssl/cert/list", "summary": "证书列表（不含私钥等内容，只含元信息）" },
+        { "method": "GET", "path": "/ssl/cert/detail", "summary": "证书详情（含 crt / key / ca-bundle / csr 明文）", "params": [
+          { "name": "id", "type": "int", "required": true, "desc": "证书 ID" }
+        ] },
+        { "method": "POST", "path": "/ssl/cert/parse", "summary": "解析证书 / CSR：自动读取域名（SAN + CN）、有效期、签发者、公钥、指纹；传 key_pem 时一并校验两者是否配对", "params": [
+          { "name": "pem", "type": "string", "required": true, "desc": "PEM 文本（证书 crt 或 CSR；多张证书时只解析第一张叶子证书）" },
+          { "name": "key_pem", "type": "string", "required": false, "desc": "私钥 PEM；提供时返回 key_match（true/false）或 key_error（私钥无法解析）" }
+        ] },
+        { "method": "POST", "path": "/ssl/cert/add", "summary": "手动添加证书（至少提供 cert / key / csr 之一；域名留空时自动从证书解析；cert 与 key 同时提供时会校验配对，不匹配则拒绝）", "params": [
+          { "name": "name", "type": "string", "required": true, "desc": "证书名称" },
+          { "name": "domains", "type": "string", "required": false, "desc": "覆盖域名，逗号分隔" },
+          { "name": "cert_content", "type": "string", "required": false, "desc": "证书 PEM（crt）" },
+          { "name": "key_content", "type": "string", "required": false, "desc": "私钥 PEM（key）" },
+          { "name": "ca_bundle", "type": "string", "required": false, "desc": "CA 中间链 PEM" },
+          { "name": "csr", "type": "string", "required": false, "desc": "CSR PEM" },
+          { "name": "remark", "type": "string", "required": false, "desc": "备注" }
+        ] },
+        { "method": "POST", "path": "/ssl/cert/update", "summary": "修改证书（名称 / 内容 / 备注 / 状态）；PEM 四段未传则保持原值，传空串才清空；key 与 cert 不匹配时拒绝", "params": [
+          { "name": "id", "type": "int", "required": true, "desc": "证书 ID" },
+          { "name": "name", "type": "string", "required": true, "desc": "证书名称" },
+          { "name": "status", "type": "int", "required": false, "desc": "1 启用 / 0 停用" }
+        ] },
+        { "method": "POST", "path": "/ssl/cert/delete", "summary": "删除证书", "params": [
+          { "name": "id", "type": "int", "required": true, "desc": "证书 ID" }
+        ] },
+        { "method": "POST", "path": "/ssl/cert/self-sign", "summary": "生成自签名证书（rcgen，支持域名与 IP，保存 crt/key/csr）", "params": [
+          { "name": "name", "type": "string", "required": true, "desc": "证书名称" },
+          { "name": "domains", "type": "string", "required": true, "desc": "域名 / IP，逗号分隔" },
+          { "name": "days", "type": "int", "required": false, "desc": "有效天数，默认 365" },
+          { "name": "remark", "type": "string", "required": false, "desc": "备注" }
+        ] },
+        { "method": "POST", "path": "/ssl/cert/letsencrypt", "summary": "向 Let's Encrypt 申请证书（ACME HTTP-01，需 80 端口可达）", "params": [
+          { "name": "domains", "type": "string", "required": true, "desc": "域名（不可为 IP），逗号分隔，首个为主域名" },
+          { "name": "email", "type": "string", "required": true, "desc": "ACME 账户邮箱" },
+          { "name": "name", "type": "string", "required": false, "desc": "证书名称，缺省用主域名" },
+          { "name": "staging", "type": "bool", "required": false, "desc": "true 使用 Let's Encrypt 测试环境" },
+          { "name": "remark", "type": "string", "required": false, "desc": "备注" }
+        ] }
+      ]
+    },
+    {
+      "name": "Zap 设置（面板自身配置）",
+      "description": "动态修改 zap.yaml 的 server.*：绑定 IP / 监听端口 / 面板 HTTPS 证书 / URL 前缀；仅 admin，保存后需重启 zapd 生效",
+      "endpoints": [
+        { "method": "GET", "path": "/system/config/zap", "summary": "读取 Zap 设置：server 配置、当前面板证书信息（CN / 域名 / 有效期 / 是否与私钥匹配）、证书库可选证书、zap.yaml 路径与内容" },
+        { "method": "POST", "path": "/system/config/zap", "summary": "保存 Zap 设置，按 Tab 部分提交（只传本次修改的部分，未传字段保持不变）", "params": [
+          { "name": "server", "type": "object", "required": false, "desc": "服务设置：address（绑定 IP，如 0.0.0.0）、port（1-65535）、url_prefix（留空表示不启用前缀）" },
+          { "name": "ssl", "type": "object", "required": false, "desc": "证书设置：source（self-signed / library / manual）、cert_id（library 时必填）、cert_file、key_file、cert_content、key_content（manual 时必填，PEM 且需与证书匹配）" }
+        ] },
+        { "method": "POST", "path": "/system/config/zap/ssl/self-sign", "summary": "删除现有证书文件并重新签发自签证书（重启 zapd 后生效）" }
+      ]
+    }
+  ]
+}

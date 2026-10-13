@@ -1,0 +1,449 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+import { http } from '@/utils/request'
+import type { LoginForm, UserInfo } from '@/types/user'
+import type { ApiResponse } from '@/types/api_response'
+
+// ── 认证 ───────────────────────────────────────────────────
+
+export function login(data: LoginForm) {
+  return http.post('/auth/login', data)
+}
+
+export function getUserInfo() {
+  return http.get<ApiResponse<UserInfo>>('/user/info')
+}
+
+export function logout() {
+  return http.get<ApiResponse>('/auth/logout')
+}
+
+// ── 用户管理 CRUD ─────────────────────────────────────────
+
+/** 用户名下站点的摘要（用户列表行展开的「站点详细」用） */
+export interface UserSiteItem {
+  id: number
+  name: string
+  status: number
+  remark: string
+  /** PHP 实例标识（带版本后缀）；站点通道由此推导 */
+  php_instance: string
+  disk_used_bytes: number
+  disk_stat_at: number
+  created_at: number
+}
+
+export interface UserListItem {
+  id: number
+  username: string
+  email: string
+  phone: string
+  nickname: string
+  /** 用户家目录，如 /home/foo；老库回填前可能为空串 */
+  home_dir: string
+  /** Linux 系统账号名（每个面板用户一个账号）；空 = 未创建/未派生 */
+  linux_user: string
+  /** 该用户 PHP-FPM pool 规格 JSON；空 = 使用面板默认规格 */
+  fpm_pool: string
+  /**
+   * PHP-FPM 规格引用：''=面板默认 / 'inherit'=继承 owner(reseller) 名下默认 /
+   * 具体模板名（见运行环境页的 FPM 规格模板库）
+   */
+  fpm_spec_ref: string
+  last_login_ip: string
+  last_login_time: number
+  status: number
+  roles: string[]
+  permissions: string[]
+  owner_id: number
+  /** 归属用户名（owner_id 对应用户；0 或已删除时为空串） */
+  owner_username: string
+  /** 用户类型：0=客户（独立家目录与系统账号）/ 1=成员（共享父账号） */
+  user_kind: number
+  /** 父账号对该成员收紧（取消）的权限点；仅成员有值 */
+  perm_deny: string[]
+  /** 只读账号：共享可见但不可改（生效权限只保留查看类） */
+  read_only: boolean
+  /** 绑定的套餐 id；0 = 未绑定套餐 */
+  package_id: number
+  /** 名下账号数上限（0 = 不限）；仅具备建子账号能力的账户（reseller）有意义 */
+  max_users: number
+  /** 套餐名（未绑定时为空串） */
+  package_name: string
+  /** 家目录磁盘占用（字节）；0 = 未采集或家目录不存在 */
+  disk_used_bytes: number
+  /** 磁盘用量采集时间（Unix 秒）；0 = 从未采集 */
+  disk_stat_at: number
+  /** 本月出站流量（字节） */
+  bandwidth_used_bytes: number
+  /** 流量统计周期（YYYYMM） */
+  bandwidth_period: string
+  bandwidth_stat_at: number
+  /** 该用户名下的站点摘要；展开行的「站点详细」直接取用 */
+  sites: UserSiteItem[]
+  created_at: number
+  updated_at: number
+}
+
+export interface UserListResponse {
+  code: number
+  message: string
+  data: UserListItem[]
+  total: number
+}
+
+/** 获取用户列表 */
+export function getUserList(params?: { username?: string; status?: string }) {
+  return http.get<UserListResponse>('/system/user/list', { params })
+}
+
+export interface ResellerItem {
+  id: number
+  username: string
+  nickname: string
+}
+
+/** 获取经销商列表（admin 用于分配客户归属） */
+export function getResellerList() {
+  return http.get<ApiResponse<ResellerItem[]>>('/system/user/resellers')
+}
+
+export interface CreateUserPayload {
+  username: string
+  password: string
+  email: string
+  phone?: string
+  nickname?: string
+  roles?: string
+  owner_id?: number
+  /** 该用户 PHP-FPM pool 规格 JSON；缺省用面板默认（admin） */
+  fpm_pool?: string
+  /**
+   * PHP-FPM 规格引用：''=面板默认 / 'inherit'=继承 owner(reseller) 名下默认 / 模板名
+   * （与 fpm_pool 互斥，提交其一即可）
+   */
+  fpm_spec_ref?: string
+  /** 套餐 id；0 / 缺省 = 不绑定套餐（不继承套餐限制） */
+  package_id?: number
+  /** 个人附加权限点：在角色权限之外单独授予（只做加法，admin） */
+  permissions?: string[]
+  /** 用户类型：0=客户（默认） / 1=成员（子账号，共享归属用户的家目录与系统账号） */
+  user_kind?: number
+  /** 父账号对该成员收紧（取消）的权限点；仅成员生效 */
+  perm_deny?: string[]
+  /** 只读账号：开启后只能查看，不能做任何修改 */
+  read_only?: boolean
+  /** 名下账号数上限（0 = 不限）；仅 admin 建 reseller 时生效 */
+  max_users?: number
+}
+
+/** 新增用户（返回 id / 家目录 / Linux 账号） */
+export function createUser(data: CreateUserPayload) {
+  return http.post<ApiResponse<{ id: number; home_dir: string; linux_user: string }>>(
+    '/system/user/add',
+    data,
+  )
+}
+
+export interface UpdateUserPayload {
+  id: number
+  email?: string
+  phone?: string
+  nickname?: string
+  roles?: string
+  status?: number
+  password?: string
+  /** 该用户 PHP-FPM pool 规格 JSON；空 = 恢复面板默认（admin） */
+  fpm_pool?: string
+  /**
+   * PHP-FPM 规格引用：''=面板默认 / 'inherit'=继承 owner(reseller) 名下默认 / 模板名；
+   * 与 fpm_pool 互斥，提交引用时后端会清空旧的自定义 JSON（reseller 仅限自己名下模板）
+   */
+  fpm_spec_ref?: string
+  /** 套餐 id；0 = 解除套餐绑定（变更后会重新下发磁盘配额） */
+  package_id?: number
+  /** 个人附加权限点；传空数组 = 清空附加权限（admin） */
+  permissions?: string[]
+  /** 父账号对该成员收紧（取消）的权限点；传空数组 = 取消全部收紧 */
+  perm_deny?: string[]
+  /** 只读开关：开启后只能查看，不能做任何修改 */
+  read_only?: boolean
+  /** 名下账号数上限（0 = 不限）；仅 admin 可设置 */
+  max_users?: number
+}
+
+/** 更新用户结果 */
+export interface UpdateUserResult extends ApiResponse {}
+
+/** 更新用户（管理员编辑或用户自己改密码） */
+export function updateUser(data: UpdateUserPayload) {
+  return http.post<UpdateUserResult>('/system/user/update', data)
+}
+
+/** 删除用户 */
+export function deleteUser(id: number) {
+  return http.post<ApiResponse>('/system/user/delete', { id })
+}
+
+// ── 代登录（一键登录客户面板） ─────────────────────────────
+/** 代登录返回：直接携带目标账号的 JWT（与登录接口同构，access_token 在顶层） */
+export interface SudoLoginResult {
+  code: number
+  message?: string
+  access_token: string
+  expire_in: number
+}
+
+/** 以管理员 / 经销商身份代登录目标客户面板 */
+export function sudoLogin(id: number) {
+  return http.post<SudoLoginResult>('/system/user/sudo', { id })
+}
+
+// ── 用户级菜单例外 ─────────────────────────────────────────
+//
+// 在「角色 → 菜单」之外，单独给某个人加减侧边栏入口（表 user_menus）。
+// 只影响菜单渲染：看得见 ≠ 能改，操作权限仍由角色 / 附加权限点决定。
+
+export interface UserMenus {
+  user_id: number
+  /** 该用户已获得的额外菜单 id */
+  menu_ids: number[]
+  /** 当前操作者可授予的菜单 id（提交范围外的 id 会被后端丢弃） */
+  available_ids: number[]
+}
+
+/** 读取某用户的额外菜单，以及当前登录者可授予的范围 */
+export function getUserMenus(userId: number) {
+  return http.get<ApiResponse<UserMenus>>('/user/menus', {
+    params: { user_id: userId },
+  })
+}
+
+/** 全量覆盖某用户的额外菜单 */
+export function setUserMenus(userId: number, menuIds: number[]) {
+  return http.post<ApiResponse>('/user/menus/set', {
+    user_id: userId,
+    menu_ids: menuIds,
+  })
+}
+
+/** 修改当前用户密码 */
+export function changeMyPassword(newPassword: string) {
+  return http.post<ApiResponse>('/system/user/update', { password: newPassword })
+}
+
+// ── 团队成员（子账号）───────────────────────────────────────
+//
+// 成员共享父账号的家目录与 Linux 系统账号（同一个 uid），权限默认继承父账号的
+// 生效权限，父账号可通过 perm_deny 再收紧。层级固定一层：成员不能再建成员。
+
+/** 团队成员（子账号）列表项 */
+export interface TeamMemberItem {
+  id: number
+  username: string
+  nickname: string
+  email: string
+  phone: string
+  status: number
+  roles: string[]
+  permissions: string[]
+  /** 父账号收紧（收回）的权限点 */
+  perm_deny: string[]
+  /** 只读成员：共享可见但不可改 */
+  read_only: boolean
+  /** 共享的家目录与系统账号（取自父账号，成员不单独建） */
+  home_dir: string
+  linux_user: string
+  last_login_time: number
+  last_login_ip: string
+  created_at: number
+  updated_at: number
+}
+
+/** 新增成员参数 */
+export interface TeamAddPayload {
+  username: string
+  password: string
+  email: string
+  phone?: string
+  nickname?: string
+  perm_deny?: string[]
+  /** 只读成员：可见但不可改 */
+  read_only?: boolean
+}
+
+/** 修改成员参数 */
+export interface TeamUpdatePayload {
+  id: number
+  email?: string
+  phone?: string
+  nickname?: string
+  status?: number
+  password?: string
+  perm_deny?: string[]
+  /** 只读开关（不传 = 不改动） */
+  read_only?: boolean
+}
+
+/** 团队成员列表（当前用户名下的成员） */
+export function getTeamList() {
+  return http.get<ApiResponse<TeamMemberItem[]>>('/user/team/list')
+}
+
+/** 新增成员 */
+export function createTeamMember(data: TeamAddPayload) {
+  return http.post<ApiResponse<{ id: number }>>('/user/team/add', data)
+}
+
+/** 修改成员（基本信息 / 状态 / 密码 / 收紧权限） */
+export function updateTeamMember(data: TeamUpdatePayload) {
+  return http.post<ApiResponse>('/user/team/update', data)
+}
+
+/** 删除成员（只删面板账号，不动共享的系统账号） */
+export function deleteTeamMember(id: number) {
+  return http.post<ApiResponse>('/user/team/delete', { id })
+}
+
+// ── 家目录 / 运行实体同步 ──────────────────────────────────
+
+export interface HomeSyncOkItem {
+  id: number
+  username: string
+  home_dir: string
+  linux_user: string
+  mode: string
+}
+
+export interface HomeSyncFailItem extends HomeSyncOkItem {
+  error: string
+}
+
+export interface HomeSyncResult {
+  ok: HomeSyncOkItem[]
+  fail: HomeSyncFailItem[]
+  mode: string
+}
+
+/** 批量补齐用户运行实体（每个用户：Linux 账号 nologin + 家目录赋权，admin only） */
+export function userHomeSync() {
+  return http.post<ApiResponse<HomeSyncResult>>('/system/user/home_sync', undefined, {
+    timeout: 60000,
+  })
+}
+
+// ── TOTP 两步验证 ───────────────────────────────────────────
+
+export interface TotpSetupResult {
+  secret: string
+  otpauth_url: string
+}
+
+/** 生成两步验证密钥与 otpauth URL */
+export function totpSetup() {
+  return http.get<ApiResponse<TotpSetupResult>>('/auth/totp/setup')
+}
+
+/** 提交验证码启用两步验证 */
+export function totpVerify(code: string) {
+  return http.post<ApiResponse>('/auth/totp/verify', { code })
+}
+
+/** 校验验证码后关闭两步验证 */
+export function totpDisable(code: string) {
+  return http.post<ApiResponse>('/auth/totp/disable', { code })
+}
+
+/** 查询两步验证开启状态 */
+export function totpStatus() {
+  return http.get<ApiResponse<{ enabled: boolean }>>('/auth/totp/status')
+}
+
+// ── 个人中心 → 偏好设置 ─────────────────────────────────────
+
+/** 当前用户通知偏好（个人中心 → 偏好设置） */
+export interface NoticePrefs {
+  /** 默认发送渠道：site=站内信 / email=邮件（多选） */
+  notify_channels: ('site' | 'email')[]
+  /** 账户接近磁盘配额 */
+  notify_disk_quota: boolean
+  /** 账户接近带宽限制 */
+  notify_bandwidth: boolean
+  /** SSL 证书即将过期 */
+  notify_ssl_expiry: boolean
+  /** 账户密码变化 */
+  notify_password_change: boolean
+  /** 是否由管理员/系统强制关闭「密码变更」通知（个人设置不暴露，可选） */
+  password_change_disable?: boolean
+  /** 有人登录我的账户（成功登录通知） */
+  notify_login: boolean
+  /** 是否由管理员/系统强制关闭「登录」通知（个人设置不暴露，可选） */
+  login_disable?: boolean
+  /** AutoSSL 通知模式：deferrals=失败及延后 / failures=仅失败 / disabled=禁用 */
+  autossl_notify_mode: 'deferrals' | 'failures' | 'disabled'
+}
+
+/** 读取当前用户偏好设置 */
+export function getMyPrefs() {
+  return http.get<ApiResponse<NoticePrefs>>('/user/prefs')
+}
+
+/** 保存当前用户偏好设置 */
+export function saveMyPrefs(data: NoticePrefs) {
+  return http.post<ApiResponse<NoticePrefs>>('/user/prefs', data)
+}
+
+// ── 登录记录 / 下线所有设备 ────────────────────────────────
+//
+// JWT 是无状态的，服务端不保存会话；「下线所有设备」靠的是每个用户的会话版本号
+// （user.token_version）：版本号 +1 后，此前签发的面板 token、Web 应用 Cookie 与
+// 静态 API Token 在下次请求时一律判为已下线。当前设备不下线——后端会换发一个新 token。
+
+/** 登录记录条目 */
+export interface LoginRecordItem {
+  id: number
+  /** 0 = 未能匹配到账号（用户名不存在 / 密码错误） */
+  user_id: number
+  username: string
+  ip: string
+  /** 原始 User-Agent，可能为空 */
+  user_agent: string
+  /** success | failed | 2fa_failed */
+  status: string
+  created_at: number
+}
+
+/** 当前用户最近的登录记录（含失败尝试，按时间倒序） */
+export function getMyLoginHistory(params?: { page?: number; page_size?: number }) {
+  return http.get<{ code: number; message: string; data: LoginRecordItem[]; total: number }>(
+    '/user/login_history',
+    { params },
+  )
+}
+
+/** 下线该用户名下的所有设备（当前设备换发新 token，保持登录） */
+export function logoutAllDevices() {
+  return http.post<ApiResponse<{ access_token: string }>>('/user/logout_all')
+}
+
+// ── 家目录备份 ────────────────────────────────────────────
+
+export interface HomeBackupData {
+  /** 后台任务 id，用 `/appstore/runs` 轮询成败 */
+  task_id: string
+  username: string
+  /** 产出压缩包路径：`{home}/backups/home_backup_<时间戳>.tar.gz` */
+  path: string
+  log: string
+}
+
+/**
+ * 把家目录打包进 `{home}/backups/`。
+ *
+ * 打包可能耗时很久，故只返回 run_id（任务在服务端后台跑），调用方轮询
+ * 运行记录判断成败；`username` 留空即备份当前登录用户自己。
+ */
+export function backupHome(username?: string) {
+  return http.post<ApiResponse<HomeBackupData>>('/system/user/backup-home', {
+    ...(username ? { username } : {}),
+  })
+}

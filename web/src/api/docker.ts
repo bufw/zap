@@ -1,0 +1,380 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+import { http } from '@/utils/request'
+
+// ── 数据模型 ─────────────────────────────────────────────
+// 后端走 Docker Engine API，字段名沿用 docker CLI 的大写风格（前端已按此绑定）。
+// 标 `?` 的字段取决于 API 版本 / 查询参数，可能缺席，UI 上不做强依赖。
+
+/** 容器行 */
+export interface DockerContainer {
+  ID: string
+  Image: string
+  Names: string
+  State: string
+  Status: string
+  Ports: string
+  CreatedAt: string
+  RunningFor?: string
+  Size?: string
+  Labels?: string
+  /** 后端从 compose label 解析出的项目名称（可能为空串） */
+  project: string
+}
+
+/** 资源快照行 */
+export interface DockerStat {
+  ID?: string
+  Name: string
+  CPUPerc: string
+  MemUsage: string
+  MemPerc: string
+  NetIO?: string
+  BlockIO?: string
+  PIDs?: string
+}
+
+/** 镜像行 */
+export interface DockerImage {
+  ID: string
+  Repository: string
+  Tag: string
+  /** 精确引用 `repo:tag`（悬空镜像为 ID）：删除 / 运行都用它，避免误删同一镜像的其它名字 */
+  Ref?: string
+  /** 同一个镜像 ID 共有几个名字；> 1 说明列表里还有它的别名行 */
+  SharedTags?: number
+  Digest?: string
+  Size: string
+  CreatedAt: string
+  CreatedSince?: string
+  Containers: string
+  /** 前端补的唯一行键（同 ID 多 tag 展开后 ID 不再唯一） */
+  Key?: string
+}
+
+/** 数据卷行 */
+export interface DockerVolume {
+  Name: string
+  Driver: string
+  Mountpoint: string
+  /**
+   * 数据真正所在的宿主机目录：bind mount 卷取 `Options.device`，其余同 Mountpoint。
+   * local 驱动建 bind 卷时 Mountpoint 仍指向 daemon 默认目录，面板要展示的是这里。
+   */
+  DataDir?: string
+  Scope: string
+  Labels?: string
+  CreatedAt?: string
+}
+
+/** 网络行 */
+export interface DockerNetwork {
+  ID: string
+  Name: string
+  Driver: string
+  Scope: string
+  /** Engine API 直接给布尔值 */
+  IPv6: boolean
+  Internal?: boolean
+  CreatedAt?: string
+}
+
+/** Compose 项目存放区域 */
+export type ComposeLocation = 'global' | 'user' | 'panel' | 'external'
+
+/** Compose 项目（`docker compose ls` + 后端扫描的各区域目录） */
+export interface DockerComposeProject {
+  Name: string
+  /** `running(2)` / `exited(1)` / `created`（扫到的、还没启动的项目） */
+  Status: string
+  ConfigFiles: string
+  /** 存放区域：`global`（/opt/docker）/ `user`（用户 home）/ `panel`（stacks）/ `external` */
+  Location?: ComposeLocation
+  /** 位置是否归面板管：只有受管项目允许在面板中编辑配置 */
+  Managed?: boolean
+  /** 目录是否归面板管：删除项目时会一并清理（用户自己在 home 里放的项目只 down） */
+  ManagedDir?: boolean
+}
+
+export interface DockerEnvStatus {
+  installed: boolean
+  daemon: boolean
+  version: string
+  compose: boolean
+  error: string
+}
+
+/** 批量操作的失败明细 */
+export interface DockerFailedItem {
+  id: string
+  error: string
+}
+
+export interface DockerActionResult {
+  output?: string
+  succeeded?: number
+  failed?: DockerFailedItem[]
+}
+
+export interface DockerLogsResult {
+  log: string
+}
+
+type Api<T> = { code: number; message: string; data: T }
+
+// ── 环境探测 ─────────────────────────────────────────────
+
+export function dockerStatus() {
+  return http.get<Api<DockerEnvStatus>>('/docker/status')
+}
+
+// ── 容器 ─────────────────────────────────────────────────
+
+export function listContainers(all = true) {
+  return http.get<Api<{ items: DockerContainer[] }>>('/docker/containers', {
+    params: { all },
+  })
+}
+
+export function containerStats() {
+  return http.get<Api<{ items: DockerStat[] }>>('/docker/stats')
+}
+
+export function containerInspect(id: string) {
+  return http.get<Api<Record<string, unknown>>>(`/docker/container/inspect`, {
+    params: { id },
+  })
+}
+
+export function containerLogs(params: {
+  id: string
+  tail?: number
+  since?: string
+  timestamps?: boolean
+}) {
+  return http.get<Api<DockerLogsResult>>('/docker/container/logs', { params })
+}
+
+/** 批量容器动作：start / stop / restart / pause / unpause / kill / remove */
+export function containerAction(ids: string[], action: string) {
+  return http.post<Api<DockerActionResult>>('/docker/container/action', { ids, action })
+}
+
+// ── 镜像 ─────────────────────────────────────────────────
+
+export function listImages() {
+  return http.get<Api<{ items: DockerImage[] }>>('/docker/images')
+}
+
+/** pull（id 传仓库引用）/ remove / prune */
+export function imageAction(id: string, action: string) {
+  return http.post<Api<DockerActionResult>>('/docker/image/action', { id, action })
+}
+
+// ── 镜像详情 / 构建 / 快启容器 ──────────────────────────────
+
+/** 构建历史的一层（对应 docker 的一条构建指令） */
+export interface DockerImageHistoryItem {
+  Id: string
+  Created: number
+  CreatedAt: string
+  CreatedBy: string
+  Tags: string
+  Size: number
+  SizeText: string
+  Comment: string
+}
+
+/** 镜像摘要（后端从 inspect 里挑出来的常用字段，供 UI 直接绑定） */
+export interface DockerImageSummary {
+  id: string
+  tags: string[]
+  size: number
+  sizeText: string
+  created: string
+  architecture: string
+  os: string
+  dockerVersion: string
+  author: string
+  comment: string
+  cmd: string
+  entrypoint: string
+  workdir: string
+  env: string[]
+  exposedPorts: Record<string, unknown>
+  labels: Record<string, string>
+  layers: number
+}
+
+export interface DockerImageInspect {
+  /** inspect 原文，UI 按 JSON 展示 / 复制 */
+  inspect: Record<string, unknown>
+  history: DockerImageHistoryItem[]
+  summary: DockerImageSummary
+}
+
+export function imageInspect(id: string) {
+  return http.get<Api<DockerImageInspect>>('/docker/image/inspect', { params: { id } })
+}
+
+/** 构建参数 `--build-arg KEY=VALUE` */
+export interface DockerBuildArgPayload {
+  key: string
+  value: string
+}
+
+export interface DockerImageBuildPayload {
+  /** 构建上下文目录（绝对路径） */
+  context_dir: string
+  /** Containerfile 绝对路径；留空由后端在上下文里找 Dockerfile / Containerfile */
+  containerfile?: string
+  /** 目标镜像名（可带 tag）；非管理员会被后端加上 `<用户名>/` 前缀 */
+  name: string
+  tags?: string[]
+  build_args?: DockerBuildArgPayload[]
+  /** 目标平台，如 linux/amd64；空 = 跟随宿主架构 */
+  platform?: string
+  no_cache?: boolean
+  pull?: boolean
+}
+
+export interface DockerImageBuildResult {
+  task_id: string
+  tags: string[]
+  log: string
+  context_dir: string
+  containerfile: string
+}
+
+/**
+ * 构建镜像（长任务）。
+ *
+ * 后端登记运行记录后立刻返回 `run_id`，真正干活的是后台 `docker build`；
+ * 实时日志复用 appstore 的 WebSocket（`/appstore/ws/{run_id}`）查看。
+ */
+export function imageBuild(payload: DockerImageBuildPayload) {
+  return http.post<Api<DockerImageBuildResult>>('/docker/image/build', payload)
+}
+
+/**
+ * 从镜像快启容器（等价 `docker run -d`）。
+ *
+ * `ports` 支持 `[IP:]宿主机端口:容器端口[/udp]`；`name` / `restart` 留空则用 docker 默认值。
+ */
+export function containerRun(payload: {
+  image: string
+  name?: string
+  ports?: string[]
+  restart?: string
+}) {
+  return http.post<Api<{ id: string; name: string; image: string }>>('/docker/container/run', payload)
+}
+
+// ── 数据卷 ───────────────────────────────────────────────
+
+export function listVolumes() {
+  return http.get<Api<{ items: DockerVolume[] }>>('/docker/volumes')
+}
+
+/**
+ * create / remove / prune。
+ *
+ * `location` 只在 create 时有效：
+ * - `home`（默认）：数据落在当前账号家目录下的 `volumes/<name>`，进配额、随 home 备份；
+ * - `default`：交给 Docker，落在 `/var/lib/docker/volumes/<name>/_data`，由 daemon 托管。
+ */
+export function volumeAction(
+  name: string,
+  action: string,
+  location?: 'home' | 'default',
+) {
+  return http.post<Api<DockerActionResult>>('/docker/volume/action', { name, action, location })
+}
+
+// ── 网络 ─────────────────────────────────────────────────
+
+export function listNetworks() {
+  return http.get<Api<{ items: DockerNetwork[] }>>('/docker/networks')
+}
+
+/** create（可带 driver）/ remove / prune */
+export function networkAction(name: string, action: string, driver?: string) {
+  return http.post<Api<DockerActionResult>>('/docker/network/action', { name, action, driver })
+}
+
+// ── Compose ──────────────────────────────────────────────
+
+export function listComposeProjects() {
+  return http.get<Api<{ items: DockerComposeProject[] }>>('/docker/compose')
+}
+
+/**
+ * Compose 动作：up / down / start / stop / restart / pull / build / update / rebuild。
+ *
+ * 后端最长要等 10 分钟（打镜像、拉镜像就是这么慢），这里把 axios 默认的 15s
+ * 超时一并放开：否则任务还在跑，前端已经先弹「请求超时」了。
+ */
+export function composeAction(project: string, action: string) {
+  return http.post<Api<DockerActionResult>>(
+    '/docker/compose/action',
+    { project, action },
+    { timeout: 600_000 },
+  )
+}
+
+/** compose 项目的配置文件（yaml 预览 / 编辑） */
+export interface DockerComposeFile {
+  /** 宿主机上的配置文件路径；受管项目即 `stacks/<项目>/compose.yaml` */
+  path: string
+  content: string
+  /**
+   * 是否归面板管（文件就在面板的 stacks 目录里）。
+   * 外部项目只能看不能改：改了会另写一份到 stacks 目录，反而把项目拆成两半。
+   */
+  managed: boolean
+}
+
+export function composeFile(project: string) {
+  return http.get<Api<DockerComposeFile>>('/docker/compose/file', { params: { project } })
+}
+
+/**
+ * 新建 / 覆盖 Compose 项目的 compose.yaml。
+ *
+ * `location` 只在**新建**时生效：`global`（默认，`/opt/docker`）/ `user`（当前用户家目录）。
+ * 项目已存在时后端就地覆盖，不会被搬到别处。
+ *
+ * `path` 是区域根之下的子目录（可选，留空就是项目名）：想让项目文件待在别处
+ * 就填 `docker/podhello` → `<home>/docker/podhello`、`/opt/docker/docker/podhello`。
+ * 只收相对路径，最多 3 层，不含 `.` / `..`（后端会校验）。
+ */
+export function composeSave(
+  project: string,
+  content: string,
+  location?: ComposeLocation,
+  path?: string,
+) {
+  return http.post<Api<{ project: string; path: string; location: ComposeLocation }>>(
+    '/docker/compose/save',
+    { project, content, location, path },
+  )
+}
+
+/** 项目日志尾部（`docker compose logs --tail N`） */
+export function composeLogs(project: string, tail = 300) {
+  return http.get<Api<DockerActionResult>>('/docker/compose/logs', { params: { project, tail } })
+}
+
+/** 删除项目：down + 清理受管目录 */
+export function composeRemove(project: string) {
+  return http.post<Api<DockerActionResult>>('/docker/compose/remove', { project })
+}
+
+// ── 容器终端（WebSocket）─────────────────────────────────
+
+/**
+ * 后端白名单内的 shell（与 zapd 的 `ALLOWED_SHELLS` 一致）。
+ * 传别的后端直接 400——容器里跑什么解释器不能被前端随意指定。
+ */
+export const DOCKER_SHELLS = ['sh', 'bash', 'ash', 'zsh'] as const
+
+export type DockerShell = (typeof DOCKER_SHELLS)[number]

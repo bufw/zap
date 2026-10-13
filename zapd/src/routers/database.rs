@@ -1,0 +1,1304 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//! 数据库管理（MySQL / MariaDB）。
+//!
+//! 通过 **sqlx 的 MySQL 驱动**（纯 Rust 实现，不依赖 `mysql` 客户端、
+//! libmysqlclient 或 OpenSSL）直连本机实例：依次尝试本机 socket 与回环 TCP，
+//! 取第一个能过鉴权的入口（两个入口的来源字符串不同：socket = `localhost`、
+//! TCP = `127.0.0.1`）；zapadm 全被拒（1045）时用 root 凭据把账号补齐再重试，
+//! 用于「MySQL 不是面板装的、库里根本没有 zapadm」的场景。
+//! 连接身份为 `zapadm` 凭据（由 zap-crypto 从
+//! /etc/zap/credentials 解密读取），**不使用 root 账号**：
+//!
+//! - GET  /api/database/status          服务状态与版本
+//! - GET  /api/database/list            库列表（含大小 / 表数 / 字符集）
+//! - POST /api/database/create          创建库（可一并创建同名用户并授予该库权限）
+//! - POST /api/database/drop            删除库
+//! - GET  /api/database/users           用户列表（及其授权）
+//! - POST /api/database/user/create     创建用户并授权到指定库
+//! - POST /api/database/user/drop       删除用户
+//! - GET  /api/database/remote          远程访问授权列表
+//! - POST /api/database/remote/grant    授权某主机远程访问某库
+//! - POST /api/database/remote/revoke   撤销远程授权
+//!
+//! 多租户：非管理员只能看到并操作以「用户名_」为前缀的库，
+//! 创建库时会自动补上该前缀；管理员不受限制。
+
+use std::collections::HashMap;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+
+use axum::Json;
+use axum::extract::Query;
+use serde::Deserialize;
+use serde_json::{Value, json};
+use sqlx::Connection;
+use sqlx::Row;
+use sqlx::ValueRef;
+use sqlx::mysql::{MySqlConnectOptions, MySqlConnection, MySqlRow, MySqlSslMode};
+
+use crate::zap::ZapError;
+use crate::zap::ZapJsonResult;
+use crate::zap::jwt::{self, ValidatedClaims, is_admin};
+
+/// 凭据坐标（与 `zapctl cred show mysql zapadm` 一致）
+const CRED_SERVICE: &str = "mysql";
+const CRED_USER: &str = "zapadm";
+
+/// 同一凭据域下的 root 账号：仅用于「面板账号缺失」时补齐授权
+const ROOT_USER: &str = "root";
+
+/// 面板展示用的连接地址主机位（本机管理走 socket，对外连接统一提示回环地址）
+pub(crate) const DB_HOST: &str = "127.0.0.1";
+
+/// 服务端口取不到时的兜底值
+const DEFAULT_PORT: u16 = 3306;
+
+/// MySQL 配置文件（与 mysql 客户端的读取顺序对齐）
+const MYCNF: &[&str] = &[
+    "/etc/my.cnf",
+    "/etc/mysql/my.cnf",
+    "/usr/local/mysql/etc/my.cnf",
+];
+
+/// my.cnf 里可能声明 socket / port 的段（`[mysqld]` 是服务端真值）
+const MYCNF_SECTIONS: &[&str] = &["mysqld", "server", "client", "mysql", "mariadb"];
+
+/// my.cnf 解析结果：候选 socket 与端口（各自去重前的原始顺序）
+#[derive(Default)]
+struct MysqlConf {
+    sockets: Vec<String>,
+    ports: Vec<u16>,
+}
+
+use tokio::sync::OnceCell;
+
+/// 读 MySQL 配置：一次解析后缓住（改了 my.cnf 需要重启面板生效）。
+///
+/// `mysql` 客户端之所以直接登得上，是因为它按 my.cnf 找 socket / port；
+/// 面板若只认硬编码候选，遇到自定义安装路径（如 /usr/local/apps/mysql-*/…）
+/// 会连到另一个实例或连不上 —— 症状就是「CLI 登得上、面板报 1045」。
+///
+/// 解析走 `tokio::fs`（异步），避免阻塞 tokio worker（安全审计 #7）。
+static CONF: OnceCell<MysqlConf> = OnceCell::const_new();
+async fn mysql_conf() -> &'static MysqlConf {
+    CONF.get_or_init(|| async {
+        let mut c = MysqlConf::default();
+        for f in MYCNF {
+            parse_mycnf(std::path::Path::new(f), &mut c, 0).await;
+        }
+        c
+    })
+    .await
+}
+
+async fn parse_mycnf(path: &std::path::Path, out: &mut MysqlConf, depth: usize) {
+    if depth > 3 {
+        return;
+    }
+    let Ok(text) = tokio::fs::read_to_string(path).await else {
+        return;
+    };
+    let mut in_section = false;
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if let Some(sec) = line.strip_prefix('[') {
+            let name = sec.trim_end_matches(']').trim().to_ascii_lowercase();
+            // 精确匹配（否则 [mysqldump] 会被 [mysql] 误吞），并兼容 `[mysqld-8.4]` 这类版本后缀
+            in_section = MYCNF_SECTIONS
+                .iter()
+                .any(|s| name == *s || name.starts_with(&format!("{s}-")));
+            continue;
+        }
+        // !include <file> / !includedir <dir>
+        if let Some(rest) = line.strip_prefix('!')
+            && let Some((directive, arg)) = rest.split_once(char::is_whitespace)
+        {
+            let arg = arg.trim().trim_matches('\'').trim_matches('"');
+            match directive.trim() {
+                "include" => Box::pin(parse_mycnf(std::path::Path::new(arg), out, depth + 1)).await,
+                "includedir" => {
+                    if let Ok(mut rd) = tokio::fs::read_dir(arg).await {
+                        let mut files: Vec<_> = Vec::new();
+                        while let Ok(Some(e)) = rd.next_entry().await {
+                            files.push(e.path());
+                        }
+                        files.sort();
+                        for f in files {
+                            if f.is_file() {
+                                Box::pin(parse_mycnf(&f, out, depth + 1)).await;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once('=') {
+            let val = v.trim().trim_matches('\'').trim_matches('"').trim();
+            if val.is_empty() {
+                continue;
+            }
+            match k.trim() {
+                "socket" => out.sockets.push(val.to_string()),
+                "port" => {
+                    if let Ok(p) = val.parse::<u16>() {
+                        out.ports.push(p);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// 候选 socket（配置里指明的优先，均按存在性过滤并去重）
+async fn socket_candidates() -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for s in mysql_conf()
+        .await
+        .sockets
+        .iter()
+        .map(|s| s.as_str())
+        .chain(SOCKETS.iter().copied())
+    {
+        if std::path::Path::new(s).exists() && !out.iter().any(|x| x == s) {
+            out.push(s.to_string());
+        }
+    }
+    out
+}
+
+/// 候选端口（配置端口优先，最后兜默认端口）
+async fn port_candidates() -> Vec<u16> {
+    let mut out: Vec<u16> = Vec::new();
+    for p in mysql_conf()
+        .await
+        .ports
+        .iter()
+        .copied()
+        .chain([DEFAULT_PORT])
+    {
+        if !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// 本机 socket 候选（本地连接优先走 socket，无需开 TCP）
+const SOCKETS: &[&str] = &[
+    "/tmp/mysql.sock",
+    "/var/run/mysqld/mysqld.sock",
+    "/run/mysqld/mysqld.sock",
+];
+
+/// 系统库：列表与统计中一律排除
+const SYSTEM_SCHEMAS: &[&str] = &["information_schema", "mysql", "performance_schema", "sys"];
+
+// ── 连接与执行 ──────────────────────────────────────────────
+
+/// 面板实际在用的 socket（状态页展示用；备份一键导出复用此入口）
+pub(crate) async fn socket_path() -> Option<String> {
+    socket_candidates().await.into_iter().next()
+}
+
+/// 从 /etc/zap/credentials 解密读取 zapadm 密码
+///
+/// 凭据文件由 root 侧（zapctl / zapexec）写入、属组为面板组 zapadm、权限 0440，
+/// 凭据目录 0750 —— 本进程以 zapadm 运行正是靠这个属组读到的。
+/// 若目录/文件退回 root-only（0700 / 0400），本函数会报「凭据不存在」，
+/// 但文件其实在：用 `ls -ld /etc/zap/credentials /etc/zap/credentials/*.cred` 核对。
+fn zapadm_password() -> Result<String, ZapError> {
+    zap_crypto::read_cred(CRED_SERVICE, CRED_USER)
+        .map_err(|e| ZapError::New(-1, format!("读取数据库凭据失败：{e}")))
+}
+
+/// 账号连接选项（主机 / socket 由各入口另行指定）
+fn base_opts(user: &str, pwd: &str) -> MySqlConnectOptions {
+    MySqlConnectOptions::new().username(user).password(pwd)
+}
+
+/// 同一入口的「优先 TLS」版本。
+///
+/// `caching_sha2_password` 的**完整认证**（服务端密码缓存未命中：mysqld 重启、
+/// `FLUSH PRIVILEGES`、改密码之后必然发生）只在「安全通道」上收明文口令。
+/// MySQL 认为 TLS 与 unix socket 都是安全通道，但 sqlx 只认前者 ——
+/// sqlx 的 `encrypt_rsa` 是 `if stream.is_tls { 发明文 } else { 索要 RSA 公钥 }`，
+/// 而 **MySQL 在 unix socket 上根本不下发公钥**：它会把这个「索取公钥」的包当成
+/// 口令包来比对，直接回 `1045 Access denied`（实测：同一账号在 socket 上改成直发
+/// `口令+\0` 即认证通过；libmysqlclient 正是这么做的，所以 CLI 一直正常）。
+///
+/// 于是本机连接先试 TLS：sqlx 见到 `is_tls` 就会走明文口令，快/慢两条认证路径
+/// 都能过；服务端不支持 TLS（或本构建未编译 TLS）时该候选直接失败，由后面的
+/// 明文候选兜底。
+fn tls_opts(opts: MySqlConnectOptions) -> MySqlConnectOptions {
+    opts.ssl_mode(MySqlSslMode::Required)
+}
+
+/// 候选连接入口（按优先级）。
+///
+/// MySQL 的账号是 `user@host` **按来源字符串精确匹配**的，而本机连接的来源
+/// 字符串取决于入口：unix socket → `localhost`，回环 TCP → `127.0.0.1`
+/// （实例开了 `skip-name-resolve` 时不会再被反解成 localhost）。
+/// zapadm 只授权了其中一个（安装脚本建的是 `@localhost`，手工建库常见
+/// `@127.0.0.1`），走另一个入口就会被拒 —— 所以本机 socket 与回环 TCP
+/// 都列进来，逐个试到能过鉴权的那个为止。
+async fn connect_targets(user: &str, pwd: &str) -> Vec<MySqlConnectOptions> {
+    let socks = socket_candidates().await;
+    // 先 TLS、后明文：完整认证在明文 socket 上必然 1045（见 `tls_opts` 的说明）
+    let mut targets: Vec<MySqlConnectOptions> = socks
+        .iter()
+        .map(|s| tls_opts(base_opts(user, pwd).socket(s)))
+        .collect();
+    targets.extend(socks.into_iter().map(|s| base_opts(user, pwd).socket(s)));
+    // 兜底：socket 连不上时走回环 TCP（IPv4 / IPv6 × 各候选端口，与建库时给应用
+    // 账号展开的 `localhost` / `127.0.0.1` / `::1` 三种来源对齐）
+    for port in port_candidates().await {
+        targets.push(tls_opts(base_opts(user, pwd).host(DB_HOST).port(port)));
+        targets.push(tls_opts(base_opts(user, pwd).host("::1").port(port)));
+        // 明文 TCP：服务端在这个入口上会下发 RSA 公钥，完整认证同样能过
+        targets.push(base_opts(user, pwd).host(DB_HOST).port(port));
+        targets.push(base_opts(user, pwd).host("::1").port(port));
+    }
+    targets
+}
+
+/// 依次尝试候选入口，返回第一个连上的连接与其下标；全失败时返回最值得看的失败原因。
+///
+/// sqlx 的 MySQL 驱动是纯 Rust 的，`caching_sha2_password`（MySQL 8 默认）在非 TLS
+/// 连接上会向服务端取 RSA 公钥加密口令 —— 但 MySQL **只在 TCP 上下发公钥**，
+/// unix socket 上会把它当成口令包，完整认证因此必然 1045。故候选里每个入口都
+/// 先出 TLS 版本（见 `tls_opts`）。
+async fn connect_as(
+    user: &str,
+    pwd: &str,
+    start: usize,
+) -> Result<(MySqlConnection, usize), String> {
+    let targets = connect_targets(user, pwd).await;
+    let start = start.min(targets.len() - 1);
+
+    // 鉴权失败（连上了但账号/来源不匹配）比连不上更值得上报
+    let mut denied: Option<String> = None;
+    let mut last: Option<String> = None;
+    for k in 0..targets.len() {
+        let i = (start + k) % targets.len();
+        match MySqlConnection::connect_with(&targets[i]).await {
+            Ok(conn) => return Ok((conn, i)),
+            Err(e) => {
+                tracing::debug!("数据库连接入口（{user} @ #{i}）失败：{e}");
+                if denied.is_none() && e.to_string().contains("Access denied") {
+                    denied = Some(e.to_string());
+                }
+                last = Some(e.to_string());
+            }
+        }
+    }
+
+    Err(denied
+        .or(last)
+        .unwrap_or_else(|| "没有可用的连接入口".to_string()))
+}
+
+/// 以 root 建一条连接：先试凭据库里的 root 密码，再试 unix socket 上的免密 root
+/// （发行版包默认 `auth_socket` / 空密码，走 socket 不需要密码）。
+async fn root_conn() -> Result<MySqlConnection, ZapError> {
+    if let Ok(pwd) = zap_crypto::read_cred(CRED_SERVICE, ROOT_USER)
+        && let Ok((conn, _)) = connect_as(ROOT_USER, &pwd, 0).await
+    {
+        return Ok(conn);
+    }
+    for sock in socket_candidates().await {
+        let opts = base_opts(ROOT_USER, "").socket(sock);
+        if let Ok(conn) = MySqlConnection::connect_with(&opts).await {
+            return Ok(conn);
+        }
+    }
+    Err(ZapError::New(
+        -1,
+        "既读不到 MySQL root 凭据，也无法在本机 socket 上以 root 登录".to_string(),
+    ))
+}
+
+/// 用 root 补齐 zapadm 在本机三种来源的账号与授权。
+///
+/// 场景：MySQL 不是由面板 AppStore 装的（或装的时候没走到建号那一步），
+/// 库里根本没有 `zapadm`@`localhost` / `127.0.0.1` / `::1`，面板于是 1045。
+/// root 凭据与 zapadm 凭据同在一个凭据库（root 写、面板组读），这里只是把
+/// 安装脚本本来就该做的事补做一遍；root 也连不上就原样报错，不掩盖真实原因。
+async fn repair_zapadm(pwd: &str) -> Result<(), ZapError> {
+    let mut conn = root_conn().await?;
+    let escaped = escape_literal(pwd);
+    let mut sqls: Vec<String> = Vec::new();
+    for h in LOCAL_HOST_ALIASES {
+        sqls.push(format!(
+            "CREATE USER IF NOT EXISTS '{CRED_USER}'@'{h}' IDENTIFIED BY '{escaped}'"
+        ));
+        sqls.push(format!(
+            "ALTER USER '{CRED_USER}'@'{h}' IDENTIFIED BY '{escaped}'"
+        ));
+        sqls.push(format!(
+            "GRANT ALL PRIVILEGES ON *.* TO '{CRED_USER}'@'{h}' WITH GRANT OPTION"
+        ));
+    }
+    sqls.push("FLUSH PRIVILEGES".to_string());
+    exec_on(&mut conn, &sqls).await
+}
+
+/// 面板账号未授权时的排障提示
+///
+/// 面板进程以 zapadm 运行，用不了 MySQL 的 `auth_socket`（那要求 OS 用户是 root），
+/// 所以「root 侧免密」这条路在面板里不通：要么把 root 密码录进凭据库让面板自己补，
+/// 要么以 OS root 手工授权一次。
+const GRANT_HINT: &str = "本机来源没有 zapadm 账号：执行 zapctl cred set mysql root <root密码> \
+     后刷新即可自动补齐，或以 OS root 执行 mysql -u root -e \"CREATE USER 'zapadm'@'localhost' \
+     IDENTIFIED BY '$(zapctl cred show mysql zapadm)'; GRANT ALL PRIVILEGES ON *.* TO \
+     'zapadm'@'localhost' WITH GRANT OPTION; FLUSH PRIVILEGES\"";
+
+fn conn_err(reason: &str) -> ZapError {
+    ZapError::New(-1, format!("连接数据库失败：{reason}"))
+}
+
+/// 面板账号被拒且自动补齐也没成：把两边的原因都带上，便于一口气定位。
+fn denied_err(reason: &str, repair: &ZapError) -> ZapError {
+    ZapError::New(
+        -1,
+        format!("连接数据库失败：{reason}；自动补齐 zapadm 授权失败：{repair}；{GRANT_HINT}"),
+    )
+}
+
+/// 建立一条管理连接。
+///
+/// 命中过的入口会被记住，下次从它开始试（避免每次请求都先撞一次拒绝）；
+/// zapadm 在所有本机入口都被拒时，先用 root 凭据把账号补齐再重试一次。
+async fn connect() -> Result<MySqlConnection, ZapError> {
+    let pwd = zapadm_password()?;
+    let start = LAST_OK.load(Ordering::Relaxed);
+
+    let (conn, i) = match connect_as(CRED_USER, &pwd, start).await {
+        Ok(v) => v,
+        Err(reason) => {
+            if !reason.contains("Access denied") {
+                return Err(conn_err(&reason));
+            }
+            match repair_zapadm(&pwd).await {
+                Ok(()) => {
+                    tracing::warn!("zapadm 未在本机来源授权，已用 root 自动补齐后重连");
+                    connect_as(CRED_USER, &pwd, start)
+                        .await
+                        .map_err(|r| conn_err(&r))?
+                }
+                Err(e) => {
+                    tracing::warn!("自动补齐 zapadm 授权失败：{e}");
+                    return Err(denied_err(&reason, &e));
+                }
+            }
+        }
+    };
+    LAST_OK.store(i, Ordering::Relaxed);
+    Ok(conn)
+}
+
+/// 上一次连接成功的入口下标（候选顺序固定，故可直接复用）
+static LAST_OK: AtomicUsize = AtomicUsize::new(0);
+
+/// 把一列值转成展示用的文本：字符串原样、整型转十进制、NULL 为空串。
+///
+/// 统一走文本后，上层解析逻辑与列的实际类型（VARCHAR / BIGINT / UNSIGNED …）
+/// 解耦，不会因为 MySQL 返回的列类型变化而解码失败。
+fn cell_text(row: &MySqlRow, i: usize) -> String {
+    if let Ok(v) = row.try_get_raw(i)
+        && v.is_null()
+    {
+        return String::new();
+    }
+    if let Ok(v) = row.try_get::<String, _>(i) {
+        return v;
+    }
+    if let Ok(v) = row.try_get::<i64, _>(i) {
+        return v.to_string();
+    }
+    if let Ok(v) = row.try_get::<u64, _>(i) {
+        return v.to_string();
+    }
+    if let Ok(v) = row.try_get::<f64, _>(i) {
+        return format!("{v:.0}");
+    }
+    if let Ok(v) = row.try_get::<Vec<u8>, _>(i) {
+        return String::from_utf8_lossy(&v).into_owned();
+    }
+    String::new()
+}
+
+/// 在已有连接上执行查询，返回「行 → 列（文本）」。
+async fn rows_of(conn: &mut MySqlConnection, sql: &str) -> Result<Vec<Vec<String>>, ZapError> {
+    // sqlx 0.9 要求动态 SQL 显式标注已审计：这里拼的都是内部构造的语句，
+    // 用户传入的标识符在调用前已按规则校验 / 转义。
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .fetch_all(conn)
+        .await
+        .map_err(|e| ZapError::New(-1, format!("数据库查询失败：{e}")))?;
+    Ok(rows
+        .iter()
+        .map(|r| (0..r.len()).map(|i| cell_text(r, i)).collect())
+        .collect())
+}
+
+/// 开一条连接执行单条查询（用完即关）。
+async fn query_rows(sql: &str) -> Result<Vec<Vec<String>>, ZapError> {
+    let mut conn = connect().await?;
+    rows_of(&mut conn, sql).await
+}
+
+/// 在已有连接上依次执行若干条语句（MySQL 不支持预编译参数化 DDL，
+/// 标识符与字面量仍由调用方按规则校验 / 转义后拼进 SQL）。
+async fn exec_on(conn: &mut MySqlConnection, sqls: &[String]) -> Result<(), ZapError> {
+    for sql in sqls {
+        sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| ZapError::New(-1, format!("数据库操作失败：{e}")))?;
+    }
+    Ok(())
+}
+
+/// 执行若干条语句（开一条连接，按序执行后关闭）。
+async fn run_sqls(sqls: &[String]) -> Result<(), ZapError> {
+    if sqls.is_empty() {
+        return Ok(());
+    }
+    let mut conn = connect().await?;
+    exec_on(&mut conn, sqls).await
+}
+
+// ── 校验与转义 ──────────────────────────────────────────────
+
+/// 校验标识符（库名 / 用户名）：字母、数字、下划线、连字符，长度 ≤ 64。
+fn check_ident(name: &str, label: &str) -> Result<String, ZapError> {
+    if name.is_empty() || name.len() > 64 {
+        return Err(ZapError::New(-1, format!("{label}长度必须在 1-64 之间")));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(ZapError::New(
+            -1,
+            format!("{label}只能包含字母、数字、下划线和连字符"),
+        ));
+    }
+    Ok(name.to_string())
+}
+
+/// 转义 SQL 字符串字面量（用于密码等）。
+fn escape_literal(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+/// 主机部分（用于 user@host）：允许 %、IP、localhost 与域名。
+fn check_host(host: &str) -> Result<String, ZapError> {
+    let h = host.trim();
+    if h.is_empty() || h.len() > 255 {
+        return Err(ZapError::New(-1, "主机地址不合法".to_string()));
+    }
+    if !h
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '%' | '_' | ':'))
+    {
+        return Err(ZapError::New(-1, "主机地址含有非法字符".to_string()));
+    }
+    Ok(h.to_string())
+}
+
+/// 本机来源的等价写法。
+///
+/// MySQL 的 `user@host` 是**按来源字符串精确匹配**的：`'u'@'localhost'` 只覆盖
+/// unix socket 连接，以及开启了反解（127.0.0.1 → localhost）时的回环 TCP 连接；
+/// 一旦实例开了 `skip-name-resolve`，应用用 `127.0.0.1:3306` 连就会匹配不上而被拒。
+/// 因此建库时统一把「本机来源」展开成这三种写法，socket / IPv4 / IPv6 入口都能连。
+const LOCAL_HOST_ALIASES: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
+
+/// 把请求里的 host 展开成需要授权的来源列表。
+///
+/// 本机来源（localhost / 127.0.0.1 / ::1 任一）→ 全部等价写法；
+/// 其它（远程 IP / 域名 / `%`）→ 原样返回，不做猜测。
+fn host_targets(host: &str) -> Vec<String> {
+    let h = host.trim();
+    if LOCAL_HOST_ALIASES.iter().any(|a| a.eq_ignore_ascii_case(h)) {
+        return LOCAL_HOST_ALIASES.iter().map(|a| a.to_string()).collect();
+    }
+    vec![h.to_string()]
+}
+
+/// 非管理员可见的库名前缀；管理员返回 None 表示不限制。
+fn schema_prefix(claims: &jwt::Claims) -> Option<String> {
+    if is_admin(claims) {
+        return None;
+    }
+    Some(schema_prefix_of(&claims.sub))
+}
+
+/// 用户名 → 库名前缀（非字母数字统一替换为 `_`，与建库补前缀规则一致）
+pub(crate) fn schema_prefix_of(username: &str) -> String {
+    let user: String = username
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    format!("{user}_")
+}
+
+/// 统计库数量：`prefixes` 为空表示统计全部非系统库（admin）。
+///
+/// MySQL 不可用 / 未配置时返回 0（不阻断仪表盘渲染）。
+pub(crate) async fn count_schemas(prefixes: &[String]) -> i64 {
+    let Ok(rows) = query_rows("SELECT SCHEMA_NAME FROM information_schema.SCHEMATA").await else {
+        return 0;
+    };
+    let mut n = 0i64;
+    for row in rows {
+        let name = row
+            .first()
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        if name.is_empty() || SYSTEM_SCHEMAS.contains(&name.as_str()) {
+            continue;
+        }
+        if !prefixes.is_empty() && !prefixes.iter().any(|p| name.starts_with(p.as_str())) {
+            continue;
+        }
+        n += 1;
+    }
+    n
+}
+
+/// 校验库归属：非管理员只能操作自己前缀下的库。
+fn ensure_owned(claims: &jwt::Claims, schema: &str) -> Result<String, ZapError> {
+    let name = check_ident(schema, "数据库名")?;
+    if let Some(p) = schema_prefix(claims)
+        && !name.starts_with(&p)
+    {
+        return Err(ZapError::New(
+            -1,
+            format!("无权操作数据库 `{name}`：只能管理以 `{p}` 开头的库"),
+        ));
+    }
+    Ok(name)
+}
+
+// ── 请求体 ──────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct SchemaReq {
+    pub name: String,
+}
+
+#[derive(Deserialize)]
+pub struct ListQuery {
+    /// 轻量模式（light=1）：跳过容量 / 表数量统计（大库统计较慢）
+    #[serde(default)]
+    pub light: Option<u8>,
+}
+
+#[derive(Deserialize)]
+pub struct CreateDbReq {
+    pub name: String,
+    #[serde(default = "default_charset")]
+    pub charset: String,
+    /// 是否同时创建「与库同名」的数据库用户并授予该库全部权限（默认 false = 仅建库）
+    #[serde(default)]
+    pub create_user: bool,
+    /// 自定义数据库用户名（不含 `{用户名}_` 前缀）；留空 = 与库名同名
+    #[serde(default)]
+    pub user: Option<String>,
+    /// 自定义密码；留空 = 自动生成 16 位随机密码
+    #[serde(default)]
+    pub password: Option<String>,
+    /// 数据库用户允许连接的主机（默认 localhost）
+    #[serde(default = "default_host")]
+    pub host: String,
+}
+
+/// 生成 16 位随机密码（大小写字母 + 数字，剔除 0/O/1/l/I 等易混淆字符）。
+///
+/// 密码只含字母数字，避免在 SQL 字面量、配置文件、终端里产生转义歧义。
+fn gen_db_password() -> String {
+    use rand::Rng;
+    const CHARS: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+    let mut rng = rand::thread_rng();
+    (0..16)
+        .map(|_| CHARS[rng.gen_range(0..CHARS.len())] as char)
+        .collect()
+}
+
+fn default_charset() -> String {
+    "utf8mb4".to_string()
+}
+
+#[derive(Deserialize)]
+pub struct UserCreateReq {
+    pub user: String,
+    pub password: String,
+    /// 允许连接的主机：localhost / % / 具体 IP
+    #[serde(default = "default_host")]
+    pub host: String,
+    /// 授权到的库；为空表示不授权库（仅创建用户）
+    #[serde(default)]
+    pub schema: Option<String>,
+}
+
+fn default_host() -> String {
+    "localhost".to_string()
+}
+
+#[derive(Deserialize)]
+pub struct UserDropReq {
+    pub user: String,
+    #[serde(default = "default_host")]
+    pub host: String,
+}
+
+#[derive(Deserialize)]
+pub struct RemoteGrantReq {
+    pub user: String,
+    pub schema: String,
+    /// 允许远程连接的主机（IP 或 %）
+    pub host: String,
+    /// 是否同时设置/更新密码（可选）
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+// ── handlers ────────────────────────────────────────────────
+
+/// GET /api/database/status：服务状态与版本。
+pub async fn status(_claims: ValidatedClaims) -> ZapJsonResult {
+    let mut conn = connect().await?;
+    let cols = rows_of(
+        &mut conn,
+        "SELECT VERSION(), IFNULL(@@global.sql_mode, ''), @@port",
+    )
+    .await?
+    .into_iter()
+    .next()
+    .unwrap_or_default();
+    let version = cols.first().cloned().unwrap_or_default();
+    // SQL 模式便于排障（严格模式会拦截隐式截断、非法日期等写法）
+    let sql_mode = cols.get(1).cloned().unwrap_or_default();
+    // 监听端口：管理操作走 socket，但客户端连接需要 `host:port`
+    let port: u16 = cols
+        .get(2)
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(DEFAULT_PORT);
+    crate::zap::api_ok(json!({
+        "ok": true,
+        "version": version,
+        "user": CRED_USER,
+        "host": DB_HOST,
+        "port": port,
+        "addr": format!("{DB_HOST}:{port}"),
+        "socket": socket_path().await,
+        "sql_mode": sql_mode,
+    }))
+}
+
+/// 套餐限制：MySQL / MariaDB 数据库数量（0 = 不限）。
+///
+/// 与站点数限制一致：只对普通用户（有 `{用户名}_` 前缀）生效，管理员不受限；
+/// 未绑定套餐 / 套餐停用时不做拦截。
+async fn ensure_db_quota(claims: &jwt::Claims) -> Result<(), ZapError> {
+    let Some(prefix) = schema_prefix(claims) else {
+        return Ok(());
+    };
+    let Some(pkg) = crate::routers::package::package_of_user(claims.id as i64).await else {
+        return Ok(());
+    };
+    if pkg.max_mysql_dbs <= 0 {
+        return Ok(());
+    }
+    let rows = query_rows("SELECT SCHEMA_NAME FROM information_schema.SCHEMATA").await?;
+    let used = rows
+        .iter()
+        .filter(|r| {
+            r.first()
+                .map(|s| s.starts_with(prefix.as_str()))
+                .unwrap_or(false)
+        })
+        .count() as i64;
+    if used >= pkg.max_mysql_dbs {
+        return Err(ZapError::New(
+            -1,
+            format!(
+                "已达套餐「{}」的数据库上限 {} 个（当前 {} 个），无法继续创建",
+                pkg.name, pkg.max_mysql_dbs, used
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// GET /api/database/list：库列表（含大小、表数、字符集、可访问账号数）。
+///
+/// `light=1` 跳过容量与表数量统计（库多/表大时统计较慢），只返回基础信息。
+pub async fn list(claims: ValidatedClaims, Query(q): Query<ListQuery>) -> ZapJsonResult {
+    let light = q.light.unwrap_or(0) != 0;
+    let sql = if light {
+        "SELECT s.SCHEMA_NAME, \
+         COALESCE(s.DEFAULT_CHARACTER_SET_NAME,''), \
+         COALESCE(s.DEFAULT_COLLATION_NAME,'') \
+         FROM information_schema.SCHEMATA s \
+         ORDER BY s.SCHEMA_NAME"
+    } else {
+        "SELECT s.SCHEMA_NAME, \
+         COALESCE(s.DEFAULT_CHARACTER_SET_NAME,''), \
+         COALESCE(s.DEFAULT_COLLATION_NAME,''), \
+         CAST(COALESCE(SUM(t.DATA_LENGTH + t.INDEX_LENGTH), 0) AS UNSIGNED), \
+         COUNT(t.TABLE_NAME) \
+         FROM information_schema.SCHEMATA s \
+         LEFT JOIN information_schema.TABLES t ON t.TABLE_SCHEMA = s.SCHEMA_NAME \
+         GROUP BY s.SCHEMA_NAME, s.DEFAULT_CHARACTER_SET_NAME, s.DEFAULT_COLLATION_NAME \
+         ORDER BY s.SCHEMA_NAME"
+    };
+
+    let mut conn = connect().await?;
+    let out = rows_of(&mut conn, sql).await?;
+    let prefix = schema_prefix(&claims);
+
+    // 每库可访问账号数：mysql.db 记录库级授权（读不到就显示 0，不影响主流程）
+    let mut user_counts: HashMap<String, u64> = HashMap::new();
+    if !light
+        && let Ok(privs) = rows_of(
+            &mut conn,
+            "SELECT Db, COUNT(DISTINCT User) FROM mysql.db \
+             WHERE Db NOT IN ('mysql','sys','performance_schema','information_schema') \
+             GROUP BY Db",
+        )
+        .await
+    {
+        for row in privs {
+            if let (Some(db), Some(count)) = (row.first(), row.get(1)) {
+                user_counts.insert(db.clone(), count.parse().unwrap_or(0));
+            }
+        }
+    }
+
+    let mut items: Vec<Value> = Vec::new();
+    for cols in out {
+        if cols.len() < 3 {
+            continue;
+        }
+        let name = cols[0].clone();
+        if SYSTEM_SCHEMAS.contains(&name.as_str()) {
+            continue;
+        }
+        if let Some(p) = &prefix
+            && !name.starts_with(p.as_str())
+        {
+            continue;
+        }
+        let size: u64 = cols.get(3).and_then(|v| v.parse().ok()).unwrap_or(0);
+        let tables: u64 = cols.get(4).and_then(|v| v.parse().ok()).unwrap_or(0);
+        let users = user_counts.get(&name).copied().unwrap_or(0);
+        items.push(json!({
+            "name": name,
+            "charset": cols[1],
+            "collation": cols[2],
+            "size": size,
+            "tables": tables,
+            "users": users,
+        }));
+    }
+
+    crate::zap::api_ok(json!({ "ok": true, "list": items, "prefix": prefix, "light": light }))
+}
+
+/// POST /api/database/create：创建数据库。
+///
+/// 非管理员的库名 / 用户名一律自动补 `{用户名}_` 前缀；`create_user=true` 时
+/// 一并创建「与库同名」的用户并授予该库全部权限（密码留空则随机生成，
+/// 明文密码仅在本次响应中返回一次）。建用户失败会回滚刚建的库，避免半成品。
+/// 建库结果（HTTP 接口与 AppStore provision 共用）。
+#[derive(Debug, Clone)]
+pub(crate) struct CreatedDb {
+    pub name: String,
+    pub charset: String,
+    /// 专用用户名（create_user=false 时为 None）
+    pub user: Option<String>,
+    /// 允许连接的主机（create_user=false 时为 None）
+    pub host: Option<String>,
+    /// 明文密码（仅随机生成时在此出现一次，之后不再落盘可读取的位置）
+    pub password: Option<String>,
+}
+
+/// 建库执行体：套餐配额 → 前缀补全 → 建库 →（可选）建同名专用用户并授权。
+///
+/// HTTP 接口与 AppStore 建站包的 provision 共用同一条路径，确保配额、
+/// 多租户前缀、回滚逻辑只有一份实现。
+pub(crate) async fn create_schema(
+    claims: &jwt::Claims,
+    req: CreateDbReq,
+) -> Result<CreatedDb, ZapError> {
+    // 套餐配额：数据库数量上限（0 = 不限）
+    ensure_db_quota(claims).await?;
+    let raw = req.name.trim();
+    let prefix = schema_prefix(claims);
+    let name = match &prefix {
+        Some(p) if !raw.starts_with(p.as_str()) => check_ident(&format!("{p}{raw}"), "数据库名")?,
+        _ => ensure_owned(claims, raw)?,
+    };
+    let charset = if req.charset.trim().is_empty() {
+        "utf8mb4".to_string()
+    } else {
+        check_ident(req.charset.trim(), "字符集")?
+    };
+
+    run_sqls(&[format!("CREATE DATABASE `{name}` CHARACTER SET {charset}")]).await?;
+
+    if !req.create_user {
+        return Ok(CreatedDb {
+            name,
+            charset,
+            user: None,
+            host: None,
+            password: None,
+        });
+    }
+
+    // 库 + 用户一条龙：用户名默认与库名同名（前缀一致），也允许高级模式自定义
+    let base = req.user.as_deref().map(str::trim).unwrap_or("");
+    let raw_user = if base.is_empty() {
+        name.clone()
+    } else {
+        match &prefix {
+            Some(p) if !base.starts_with(p.as_str()) => format!("{p}{base}"),
+            _ => base.to_string(),
+        }
+    };
+    let user = check_ident(&raw_user, "用户名")?;
+    let host = check_host(&req.host)?;
+    // 本机来源展开成 localhost / 127.0.0.1 / ::1：应用用什么写法连都能进
+    let hosts = host_targets(&host);
+    let password = match req.password.as_deref().map(str::trim) {
+        Some(p) if !p.is_empty() => {
+            if p.len() < 8 {
+                let _ = run_sqls(&[format!("DROP DATABASE `{name}`")]).await;
+                return Err(ZapError::New(-1, "密码长度不能少于 8 位".to_string()));
+            }
+            p.to_string()
+        }
+        _ => gen_db_password(),
+    };
+
+    // 逐个来源建号并授权：任何一个失败，只回滚**本次新建**的账号，
+    // 不动同名的既有账号（那可能是用户自己建的，删掉会误伤）。
+    let mut conn = connect().await?;
+    let mut created: Vec<String> = Vec::new();
+    for h in &hosts {
+        let sqls = [
+            format!(
+                "CREATE USER '{user}'@'{h}' IDENTIFIED BY '{}'",
+                escape_literal(&password)
+            ),
+            format!("GRANT ALL PRIVILEGES ON `{name}`.* TO '{user}'@'{h}'"),
+        ];
+        if let Err(e) = exec_on(&mut conn, &sqls).await {
+            let mut undo: Vec<String> = created
+                .iter()
+                .map(|c| format!("DROP USER '{user}'@'{c}'"))
+                .collect();
+            undo.push(format!("DROP DATABASE `{name}`"));
+            undo.push("FLUSH PRIVILEGES".to_string());
+            let _ = exec_on(&mut conn, &undo).await;
+            return Err(e);
+        }
+        created.push(h.clone());
+    }
+    let _ = exec_on(&mut conn, &["FLUSH PRIVILEGES".to_string()]).await;
+
+    Ok(CreatedDb {
+        name,
+        charset,
+        user: Some(user),
+        host: Some(host),
+        password: Some(password),
+    })
+}
+
+/// POST /api/database/create：创建数据库。
+///
+/// 非管理员的库名 / 用户名一律自动补 `{用户名}_` 前缀；`create_user=true` 时
+/// 一并创建「与库同名」的用户并授予该库全部权限（密码留空则随机生成，
+/// 明文密码仅在本次响应中返回一次）。建用户失败会回滚刚建的库，避免半成品。
+pub async fn create(claims: ValidatedClaims, Json(req): Json<CreateDbReq>) -> ZapJsonResult {
+    let d = create_schema(&claims, req).await?;
+    let mut data = json!({ "ok": true, "name": d.name, "charset": d.charset });
+    if let (Some(u), Some(h), Some(p)) = (&d.user, &d.host, &d.password) {
+        data["user"] = json!(u);
+        data["host"] = json!(h);
+        // 明文密码仅在创建响应中返回一次，请提示用户立即保存
+        data["password"] = json!(p);
+    }
+    crate::zap::api_ok(data)
+}
+
+// ── AppStore provision：为建站包分配数据库 ──────────────────
+
+/// 库是否已存在（用于 provision 自动避让重名）。
+async fn schema_exists(name: &str) -> bool {
+    let sql = format!(
+        "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = '{}'",
+        escape_literal(name)
+    );
+    query_rows(&sql)
+        .await
+        .map(|rows| {
+            rows.iter()
+                .any(|r| r.first().map(|s| s == name).unwrap_or(false))
+        })
+        .unwrap_or(false)
+}
+
+/// 数据库服务端口（脚本连接用；取不到时用 3306 兜底）。
+pub(crate) async fn db_port() -> u16 {
+    query_rows("SELECT @@port")
+        .await
+        .ok()
+        .and_then(|rows| rows.into_iter().next()?.first()?.trim().parse().ok())
+        .unwrap_or(DEFAULT_PORT)
+}
+
+/// AppStore provision：为建站类包建一个「专用库 + 专用用户」。
+///
+/// - 库名 = 用户前缀 + `base`（`base` 缺省 `app`），重名自动加序号
+///   （同一包装多个实例不会互相覆盖）；
+/// - 密码随机 16 位，**只出现在返回值与本次脚本 env 中**（不落 options.env，
+///   也不发给前端），脚本负责写进自己的配置文件；
+/// - 配额 / 前缀 / 回滚规则与普通建库完全一致。
+pub(crate) async fn provision_db(
+    claims: &jwt::Claims,
+    base: Option<&str>,
+    charset: Option<&str>,
+    host: Option<&str>,
+) -> Result<CreatedDb, ZapError> {
+    let base = match base.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(b) => b.to_string(),
+        None => "app".to_string(),
+    };
+    let prefix = schema_prefix(claims);
+    let charset = charset
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("utf8mb4")
+        .to_string();
+    let host = host
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("localhost")
+        .to_string();
+
+    for i in 0..32 {
+        let raw = if i == 0 {
+            base.clone()
+        } else {
+            format!("{base}_{}", i + 1)
+        };
+        // 前缀由 create_schema 内部补全；这里按同样规则预判重名
+        let full = match &prefix {
+            Some(p) if !raw.starts_with(p.as_str()) => format!("{p}{raw}"),
+            _ => raw.clone(),
+        };
+        if schema_exists(&full).await {
+            continue;
+        }
+        let req = CreateDbReq {
+            name: raw,
+            charset: charset.clone(),
+            create_user: true,
+            user: None,
+            password: None,
+            host: host.clone(),
+        };
+        return create_schema(claims, req).await;
+    }
+    Err(ZapError::New(
+        -1,
+        format!("数据库名 `{base}` 已被占用，无法自动分配库名"),
+    ))
+}
+
+/// POST /api/database/drop：删除数据库。
+pub async fn drop_db(claims: ValidatedClaims, Json(req): Json<SchemaReq>) -> ZapJsonResult {
+    let name = ensure_owned(&claims, req.name.trim())?;
+    run_sqls(&[format!("DROP DATABASE `{name}`")]).await?;
+    crate::zap::api_ok(json!({ "ok": true, "name": name }))
+}
+
+/// GET /api/database/users：数据库用户列表（含授权）。
+pub async fn users(claims: ValidatedClaims) -> ZapJsonResult {
+    let mut conn = connect().await?;
+    let out = rows_of(
+        &mut conn,
+        "SELECT user, host FROM mysql.user ORDER BY user, host",
+    )
+    .await?;
+    let skip = [
+        "root",
+        "mysql.session",
+        "mysql.sys",
+        "mysql.infoschema",
+        "debian-sys-maint",
+        "zapadm",
+    ];
+    let prefix = schema_prefix(&claims);
+
+    let mut items: Vec<Value> = Vec::new();
+    for cols in out {
+        if cols.len() < 2 {
+            continue;
+        }
+        let user = cols[0].clone();
+        let host = cols[1].clone();
+        if skip.contains(&user.as_str()) {
+            continue;
+        }
+        if let Some(p) = &prefix
+            && !user.starts_with(p.as_str())
+        {
+            continue;
+        }
+        let grants = show_grants(&mut conn, &user, &host).await;
+        items.push(json!({ "user": user, "host": host, "grants": grants }));
+    }
+
+    crate::zap::api_ok(json!({ "ok": true, "list": items }))
+}
+
+/// `SHOW GRANTS FOR`：多行授权语句拼成一段文本（取不到返回空串，不影响主流程）。
+async fn show_grants(conn: &mut MySqlConnection, user: &str, host: &str) -> String {
+    let sql = format!("SHOW GRANTS FOR '{user}'@'{host}'");
+    match rows_of(conn, &sql).await {
+        Ok(rows) => rows
+            .iter()
+            .filter_map(|r| r.first().cloned())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Err(_) => String::new(),
+    }
+}
+
+/// POST /api/database/user/create：创建用户（可选授权到某个库）。
+pub async fn user_create(claims: ValidatedClaims, Json(req): Json<UserCreateReq>) -> ZapJsonResult {
+    let prefix = schema_prefix(&claims);
+    let user = match &prefix {
+        Some(p) if !req.user.starts_with(p.as_str()) => {
+            check_ident(&format!("{p}{}", req.user.trim()), "用户名")?
+        }
+        _ => check_ident(req.user.trim(), "用户名")?,
+    };
+    let host = check_host(&req.host)?;
+    if req.password.len() < 8 {
+        return Err(ZapError::New(-1, "密码长度不能少于 8 位".to_string()));
+    }
+    let pwd = escape_literal(&req.password);
+
+    let mut sqls = vec![format!(
+        "CREATE USER '{user}'@'{host}' IDENTIFIED BY '{pwd}'"
+    )];
+    if let Some(schema) = req.schema.as_deref() {
+        let db = ensure_owned(&claims, schema.trim())?;
+        sqls.push(format!(
+            "GRANT ALL PRIVILEGES ON `{db}`.* TO '{user}'@'{host}'"
+        ));
+    }
+    sqls.push("FLUSH PRIVILEGES".to_string());
+    run_sqls(&sqls).await?;
+
+    crate::zap::api_ok(json!({ "ok": true, "user": user, "host": host }))
+}
+
+/// POST /api/database/user/drop：删除用户。
+pub async fn user_drop(claims: ValidatedClaims, Json(req): Json<UserDropReq>) -> ZapJsonResult {
+    let user = check_ident(req.user.trim(), "用户名")?;
+    let host = check_host(&req.host)?;
+    if let Some(p) = schema_prefix(&claims)
+        && !user.starts_with(&p)
+    {
+        return Err(ZapError::New(-1, format!("无权删除用户 `{user}`")));
+    }
+    run_sqls(&[
+        format!("DROP USER '{user}'@'{host}'"),
+        "FLUSH PRIVILEGES".to_string(),
+    ])
+    .await?;
+    crate::zap::api_ok(json!({ "ok": true, "user": user }))
+}
+
+/// GET /api/database/remote：远程访问授权列表（host 不是本机来源的账号）。
+pub async fn remote_list(claims: ValidatedClaims) -> ZapJsonResult {
+    let mut conn = connect().await?;
+    let out = rows_of(
+        &mut conn,
+        "SELECT user, host FROM mysql.user ORDER BY user, host",
+    )
+    .await?;
+    let prefix = schema_prefix(&claims);
+
+    let mut items: Vec<Value> = Vec::new();
+    for cols in out {
+        if cols.len() < 2 {
+            continue;
+        }
+        let user = cols[0].clone();
+        let host = cols[1].clone();
+        // 远程授权：host 不是 localhost / 127.0.0.1 / ::1
+        if matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1") {
+            continue;
+        }
+        if let Some(p) = &prefix
+            && !user.starts_with(p.as_str())
+        {
+            continue;
+        }
+        let grants = show_grants(&mut conn, &user, &host).await;
+        items.push(json!({ "user": user, "host": host, "grants": grants }));
+    }
+
+    crate::zap::api_ok(json!({ "ok": true, "list": items }))
+}
+
+/// POST /api/database/remote/grant：授权某主机远程访问某库。
+pub async fn remote_grant(
+    claims: ValidatedClaims,
+    Json(req): Json<RemoteGrantReq>,
+) -> ZapJsonResult {
+    let user = check_ident(req.user.trim(), "用户名")?;
+    let db = ensure_owned(&claims, req.schema.trim())?;
+    let host = check_host(&req.host)?;
+    if let Some(p) = schema_prefix(&claims)
+        && !user.starts_with(&p)
+    {
+        return Err(ZapError::New(-1, format!("无权配置用户 `{user}`")));
+    }
+
+    let ident = format!("'{user}'@'{host}'");
+    let mut conn = connect().await?;
+    let exists = rows_of(
+        &mut conn,
+        &format!("SELECT 1 FROM mysql.user WHERE user = '{user}' AND host = '{host}'"),
+    )
+    .await
+    .map(|rows| !rows.is_empty())
+    .unwrap_or(false);
+
+    let mut sqls = Vec::new();
+    if !exists {
+        match req.password.as_deref().map(str::trim) {
+            Some(p) if !p.is_empty() => {
+                if p.len() < 8 {
+                    return Err(ZapError::New(-1, "密码长度不能少于 8 位".to_string()));
+                }
+                sqls.push(format!(
+                    "CREATE USER {ident} IDENTIFIED BY '{}'",
+                    escape_literal(p)
+                ));
+            }
+            _ => {
+                return Err(ZapError::New(
+                    -1,
+                    "该用户在该主机下不存在，设置密码后才能创建".to_string(),
+                ));
+            }
+        }
+    }
+    sqls.push(format!("GRANT ALL PRIVILEGES ON `{db}`.* TO {ident}"));
+    sqls.push("FLUSH PRIVILEGES".to_string());
+    exec_on(&mut conn, &sqls).await?;
+
+    crate::zap::api_ok(json!({ "ok": true, "user": user, "host": host, "schema": db }))
+}
+
+/// POST /api/database/remote/revoke：撤销远程授权（删除该 host 下的账号）。
+pub async fn remote_revoke(claims: ValidatedClaims, Json(req): Json<UserDropReq>) -> ZapJsonResult {
+    let user = check_ident(req.user.trim(), "用户名")?;
+    let host = check_host(&req.host)?;
+    if matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1") {
+        return Err(ZapError::New(
+            -1,
+            "只能撤销远程主机（非 localhost）的授权".to_string(),
+        ));
+    }
+    if let Some(p) = schema_prefix(&claims)
+        && !user.starts_with(&p)
+    {
+        return Err(ZapError::New(-1, format!("无权撤销用户 `{user}`")));
+    }
+    run_sqls(&[
+        format!("DROP USER '{user}'@'{host}'"),
+        "FLUSH PRIVILEGES".to_string(),
+    ])
+    .await?;
+    crate::zap::api_ok(json!({ "ok": true, "user": user }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_host_expands_to_all_loopback_forms() {
+        // 本机来源 → 三种写法都授权：应用用 localhost / 127.0.0.1 / ::1 连都能进
+        let all = vec!["localhost", "127.0.0.1", "::1"];
+        assert_eq!(host_targets("localhost"), all);
+        assert_eq!(host_targets("127.0.0.1"), all);
+        assert_eq!(host_targets("::1"), all);
+        // 大小写、两侧空白都归一
+        assert_eq!(host_targets(" LocalHost "), all);
+    }
+
+    #[tokio::test]
+    async fn mycnf_parses_socket_port_and_includes() {
+        let dir = std::env::temp_dir().join(format!("zap-mycnf-{}", std::process::id()));
+        let conf_d = dir.join("conf.d");
+        std::fs::create_dir_all(&conf_d).unwrap();
+        let main = dir.join("my.cnf");
+        std::fs::write(
+            &main,
+            format!(
+                "[mysqld]\n\
+                 socket=/tmp/from-main.sock\n\
+                 port = 3307\n\
+                 ; 注释\n\
+                 [client]\n\
+                 socket = '/tmp/from-client.sock'\n\
+                 [mysqldump]\n\
+                 socket = /tmp/ignored.sock\n\
+                 !includedir {}\n",
+                conf_d.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(conf_d.join("zap.cnf"), "[mysqld]\nport=3308\n").unwrap();
+
+        let mut c = MysqlConf::default();
+        parse_mycnf(&main, &mut c, 0).await;
+        assert_eq!(
+            c.sockets,
+            vec!["/tmp/from-main.sock", "/tmp/from-client.sock"]
+        );
+        assert_eq!(c.ports, vec![3307, 3308]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remote_host_is_kept_as_is() {
+        assert_eq!(host_targets("10.0.0.5"), vec!["10.0.0.5"]);
+        assert_eq!(host_targets("db.internal"), vec!["db.internal"]);
+        // `%` 已覆盖所有来源，不再展开
+        assert_eq!(host_targets("%"), vec!["%"]);
+    }
+}

@@ -1,0 +1,118 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+import { http } from '@/utils/request'
+
+/** 套餐（Packages）：创建客户时可选择的资源套餐 */
+export interface PackageItem {
+  id: number
+  name: string
+  remark: string
+  /** 磁盘配额（MB，0 = 不限） */
+  disk_quota_mb: number
+  /** 最大站点数（0 = 不限） */
+  max_sites: number
+  /** 单站点最大域名数（0 = 不限） */
+  max_domains: number
+  /** 月流量上限（MB，0 = 不限；面板暂无流量统计，仅记录） */
+  max_bandwidth_mb: number
+  /** MySQL / MariaDB 数据库数量（0 = 不限；超限时拒绝建库） */
+  max_mysql_dbs: number
+  /** PostgreSQL 数据库数量（0 = 不限；面板暂无 PG 模块，仅记录） */
+  max_pgsql_dbs: number
+  /** FTP 账号数量（0 = 不限；面板暂无 FTP 模块，仅记录） */
+  max_ftp_users: number
+  /** PHP-FPM 规格模板名；'' = 面板默认 */
+  fpm_spec_ref: string
+  /** 是否允许使用 SSH 终端 */
+  allow_ssh: boolean
+  /** 是否允许客户（普通用户）使用反向代理（upstream / location） */
+  allow_proxy: boolean
+  /** 是否允许客户建 PHP 站点（默认 true） */
+  allow_php: boolean
+  /** 是否允许客户为站点开启 WAF / 限速 / 限并发（默认 false，另需全局 WAF 已启用） */
+  allow_waf: boolean
+  /** 是否允许客户使用容器功能（默认 false；且仅 Podman 运行时对非管理员生效） */
+  allow_docker: boolean
+  /** 是否允许客户使用应用管理 Application Manager（默认 false） */
+  allow_apps: boolean
+  /** 允许部署的应用类型（逗号分隔，如 `python,nodejs`）；空 = 不限 */
+  app_types: string
+  /** 每个站点可部署的应用数上限（0 = 不限） */
+  max_apps: number
+  /** 每个用户分到的端口个数（0 = 不限）：端口段 = 10000 + 用户ID × N */
+  app_port_span: number
+  /** 该用户全部站点合计的应用数上限（0 = 不限） */
+  app_max_total: number
+  /** 归属：0 = 全局套餐（admin 维护）；其余为 reseller 自建 */
+  owner_id: number
+  /** 1 启用 / 0 停用 */
+  status: number
+  /** 使用该套餐的客户数 */
+  users_count: number
+  created_at: number
+  updated_at: number
+}
+
+export interface PackagePayload {
+  name: string
+  remark?: string
+  disk_quota_mb?: number
+  max_sites?: number
+  /** 单站点最大域名数（0 = 不限） */
+  max_domains?: number
+  max_bandwidth_mb?: number
+  /** MySQL / MariaDB 数据库数量（0 = 不限） */
+  max_mysql_dbs?: number
+  /** PostgreSQL 数据库数量（0 = 不限） */
+  max_pgsql_dbs?: number
+  /** FTP 账号数量（0 = 不限） */
+  max_ftp_users?: number
+  fpm_spec_ref?: string
+  allow_ssh?: boolean
+  /** 允许客户使用反向代理（upstream / location） */
+  allow_proxy?: boolean
+  /** 允许客户建 PHP 站点；不传时后端取默认（新建=开放） */
+  allow_php?: boolean
+  /** 允许客户开启站点 WAF / 限速 / 限并发；不传时后端取默认（新建=关闭） */
+  allow_waf?: boolean
+  /** 允许客户使用容器功能；不传时后端取默认（新建=关闭） */
+  allow_docker?: boolean
+  /** 允许客户使用应用管理；不传保持不变 */
+  allow_apps?: boolean
+  /** 允许部署的应用类型（数组形式，前端拼成逗号分隔字符串） */
+  app_types?: string
+  /** 每个站点可部署的应用数上限（0 = 不限） */
+  max_apps?: number
+  status?: number
+  /** 归属作用域（仅 admin 新建时生效）：'global' 全局套餐 / 'self' 仅自己可见的私有套餐 */
+  scope?: 'global' | 'self'
+}
+
+/** 更新：仅提交需要变更的字段 */
+export interface PackageUpdatePayload extends Partial<PackagePayload> {
+  id: number
+}
+
+/** 套餐列表（admin 全量；reseller 全局 + 自己名下） */
+export function getPackageList() {
+  return http.get<{ code: number; message: string; data: PackageItem[] }>(
+    '/system/package/list',
+  )
+}
+
+/** 新增套餐 */
+export function createPackage(data: PackagePayload) {
+  return http.post<{ code: number; message: string; data: { id: number } }>(
+    '/system/package/add',
+    data,
+  )
+}
+
+/** 修改套餐 */
+export function updatePackage(data: PackageUpdatePayload) {
+  return http.post<{ code: number; message: string }>('/system/package/update', data)
+}
+
+/** 删除套餐（仍被客户使用时后端会拒绝） */
+export function deletePackage(id: number) {
+  return http.post<{ code: number; message: string }>('/system/package/delete', { id })
+}

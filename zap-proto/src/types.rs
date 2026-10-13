@@ -1,0 +1,2945 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+/// serde `skip_serializing_if` 用的 false 判定（bool 字段默认值不写进 JSON）。
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// Nginx 全局配置模型的版本号：字段增减时递增，供 zapd 做模型迁移判断。
+pub const NGINX_GLOBAL_SPEC_VER: u32 = 1;
+
+/// Nginx 主配置（nginx.conf）的**唯一数据源**：面板按它全量渲染 nginx.conf。
+///
+/// 设计要点：
+/// - 所有字段均为 `Option`：
+///   - `None` → **不生成**该指令（用户可在 conf.d 里自己管这条，避免 duplicate）；
+///   - `Some(v)` → 按值渲染。天然支持「面板值 / 不生成」三态。
+/// - `preserve_*_raw` 保留 adopt 时无法识别的原配置行，逐行原样吐回，
+///   保证「一键接管」绝不吞掉用户的自定义指令。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NginxGlobalSpec {
+    #[serde(default = "default_spec_ver")]
+    pub ver: u32,
+    /// 顶层上下文（main context）
+    #[serde(default)]
+    pub general: NginxMainSpec,
+    /// events {} 上下文
+    #[serde(default)]
+    pub events: NginxEventsSpec,
+    /// http {} 上下文
+    #[serde(default)]
+    pub http: NginxHttpSpec,
+    /// 顶层 `load_module` 动态模块（如 ModSecurity、ngx cache purge）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub load_modules: Vec<String>,
+    /// http{} 之前的顶层 include（发行版 `modules-enabled/*.conf` 等）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub top_includes: Vec<String>,
+    /// 顶层识别不了、需原样保留的行（adopt 回填）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub preserve_top_raw: Vec<String>,
+    /// http{} 内识别不了、需原样保留的行（adopt 回填）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub preserve_http_raw: Vec<String>,
+}
+
+fn default_spec_ver() -> u32 {
+    NGINX_GLOBAL_SPEC_VER
+}
+
+/// 顶层上下文（main context）指令。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NginxMainSpec {
+    /// `user <value>`：None 时不生成（容器内常见做法）
+    #[serde(default)]
+    pub user: Option<String>,
+    /// `worker_processes <n|auto>`
+    #[serde(default)]
+    pub worker_processes: Option<String>,
+    /// worker 进程优先级（-20 ~ 19）
+    #[serde(default)]
+    pub worker_priority: Option<i32>,
+    #[serde(default)]
+    pub worker_rlimit_nofile: Option<u32>,
+    #[serde(default)]
+    pub worker_shutdown_timeout: Option<String>,
+    /// `timer_resolution 100ms`
+    #[serde(default)]
+    pub timer_resolution: Option<String>,
+    #[serde(default)]
+    pub pid: Option<String>,
+    /// `error_log <path> <level>`：整串参数
+    #[serde(default)]
+    pub error_log: Option<String>,
+    #[serde(default)]
+    pub pcre_jit: Option<bool>,
+    #[serde(default)]
+    pub thread_pool: Option<String>,
+}
+
+/// events {} 上下文。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NginxEventsSpec {
+    #[serde(default)]
+    pub worker_connections: Option<u32>,
+    #[serde(default)]
+    pub multi_accept: Option<bool>,
+    #[serde(default)]
+    pub accept_mutex: Option<bool>,
+    #[serde(default)]
+    pub accept_mutex_delay: Option<String>,
+    /// `use epoll`；None 时不生成（让 nginx 自选）
+    #[serde(default)]
+    pub use_method: Option<String>,
+}
+
+/// http {} 上下文：按 UI 分组，方便前端 tab 一一对应。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NginxHttpSpec {
+    #[serde(default)]
+    pub basic: NginxHttpBasicSpec,
+    #[serde(default)]
+    pub gzip: NginxGzipSpec,
+    /// SSL / TLS 与 OCSP stapling
+    #[serde(default)]
+    pub tls: NginxTlsSpec,
+    #[serde(default)]
+    pub logging: NginxLogSpec,
+    #[serde(default)]
+    pub proxy: NginxProxySpec,
+    /// 反代共享缓存区（可多条，站点 location 按名字引用）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proxy_cache: Vec<NginxCacheZone>,
+    /// 第三方 ngx cache purge 模块的清理白名单（渲染为 http 级 map）
+    #[serde(default)]
+    pub cache_purge: NginxCachePurgeSpec,
+    /// ModSecurity 等安全指令（需已加载对应模块）
+    #[serde(default)]
+    pub security: NginxSecuritySpec,
+    /// 高级：http{} 末尾追加的原样指令（同步前仍会被 `nginx -t` 把关）
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub custom_raw: String,
+}
+
+/// http{} 基础 / 性能参数。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NginxHttpBasicSpec {
+    #[serde(default)]
+    pub sendfile: Option<bool>,
+    #[serde(default)]
+    pub sendfile_max_chunk: Option<String>,
+    #[serde(default)]
+    pub tcp_nopush: Option<bool>,
+    #[serde(default)]
+    pub tcp_nodelay: Option<bool>,
+    /// `keepalive_timeout 65 65`（可带第二个值）
+    #[serde(default)]
+    pub keepalive_timeout: Option<String>,
+    #[serde(default)]
+    pub keepalive_requests: Option<u32>,
+    #[serde(default)]
+    pub send_timeout: Option<String>,
+    #[serde(default)]
+    pub client_header_timeout: Option<String>,
+    #[serde(default)]
+    pub client_body_timeout: Option<String>,
+    #[serde(default)]
+    pub reset_timedout_connection: Option<bool>,
+    #[serde(default)]
+    pub client_max_body_size: Option<String>,
+    #[serde(default)]
+    pub client_body_buffer_size: Option<String>,
+    #[serde(default)]
+    pub large_client_header_buffers: Option<String>,
+    #[serde(default)]
+    pub types_hash_max_size: Option<u32>,
+    #[serde(default)]
+    pub server_names_hash_max_size: Option<u32>,
+    #[serde(default)]
+    pub server_names_hash_bucket_size: Option<u32>,
+    #[serde(default)]
+    pub server_tokens: Option<bool>,
+    #[serde(default)]
+    pub default_type: Option<String>,
+    #[serde(default)]
+    pub variables_hash_max_size: Option<u32>,
+    #[serde(default)]
+    pub lingering_close: Option<String>,
+}
+
+/// Gzip 压缩（Brotli 由第三方模块提供，不在内置模板里）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NginxGzipSpec {
+    #[serde(default)]
+    pub enable: Option<bool>,
+    /// 压缩级别 1-9
+    #[serde(default)]
+    pub comp_level: Option<u8>,
+    #[serde(default)]
+    pub min_length: Option<u32>,
+    /// 空格分隔的 MIME 列表
+    #[serde(default)]
+    pub types: Option<String>,
+    #[serde(default)]
+    pub vary: Option<bool>,
+    #[serde(default)]
+    pub proxied: Option<String>,
+    #[serde(default)]
+    pub disable: Option<String>,
+    #[serde(default)]
+    pub http_version: Option<String>,
+    #[serde(default)]
+    pub buffers: Option<String>,
+}
+
+/// SSL / TLS 与 OCSP stapling。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NginxTlsSpec {
+    #[serde(default)]
+    pub protocols: Option<String>,
+    #[serde(default)]
+    pub ciphers: Option<String>,
+    #[serde(default)]
+    pub prefer_server_ciphers: Option<bool>,
+    #[serde(default)]
+    pub session_cache: Option<String>,
+    #[serde(default)]
+    pub session_timeout: Option<String>,
+    #[serde(default)]
+    pub session_tickets: Option<bool>,
+    #[serde(default)]
+    pub session_ticket_key: Option<String>,
+    #[serde(default)]
+    pub buffer_size: Option<String>,
+    #[serde(default)]
+    pub ecdh_curve: Option<String>,
+    #[serde(default)]
+    pub dhparam: Option<String>,
+    #[serde(default)]
+    pub early_data: Option<bool>,
+    /// OCSP stapling（`ssl_stapling`）
+    #[serde(default)]
+    pub stapling: Option<bool>,
+    #[serde(default)]
+    pub stapling_verify: Option<bool>,
+    #[serde(default)]
+    pub trusted_certificate: Option<String>,
+    #[serde(default)]
+    pub crl: Option<String>,
+    /// OCSP / resolver 解析：stapling 必需
+    #[serde(default)]
+    pub resolver: Option<String>,
+    #[serde(default)]
+    pub resolver_timeout: Option<String>,
+}
+
+/// 访问日志格式与输出。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NginxLogSpec {
+    /// `access_log` 参数串；"off" 表示关闭
+    #[serde(default)]
+    pub access_log: Option<String>,
+    #[serde(default)]
+    pub log_format_main: Option<String>,
+    #[serde(default)]
+    pub log_format_json: Option<String>,
+    #[serde(default)]
+    pub open_log_file_cache: Option<String>,
+    #[serde(default)]
+    pub error_log: Option<String>,
+}
+
+/// 默认 log_format（Nginx 官方 main / combined）。
+pub const NGINX_LOG_FORMAT_MAIN: &str = "'$remote_addr - $remote_user [$time_local] \"$request\" $status $body_bytes_sent \"$http_referer\" \"$http_user_agent\" \"$http_x_forwarded_for\"'";
+
+/// 反代默认参数（可被站点 location 级覆盖）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NginxProxySpec {
+    #[serde(default)]
+    pub connect_timeout: Option<String>,
+    #[serde(default)]
+    pub read_timeout: Option<String>,
+    #[serde(default)]
+    pub send_timeout: Option<String>,
+    #[serde(default)]
+    pub buffers: Option<String>,
+    #[serde(default)]
+    pub buffer_size: Option<String>,
+    #[serde(default)]
+    pub busy_buffers_size: Option<String>,
+    #[serde(default)]
+    pub max_temp_file_size: Option<String>,
+    #[serde(default)]
+    pub temp_file_write_size: Option<String>,
+    #[serde(default)]
+    pub temp_path: Option<String>,
+    #[serde(default)]
+    pub request_buffering: Option<bool>,
+    #[serde(default)]
+    pub buffering: Option<bool>,
+    #[serde(default)]
+    pub http_version: Option<String>,
+    #[serde(default)]
+    pub ignore_headers: Option<String>,
+    #[serde(default)]
+    pub next_upstream: Option<String>,
+    #[serde(default)]
+    pub force_ranges: Option<bool>,
+}
+
+/// 一条共享反代缓存区（`proxy_cache_path`）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NginxCacheZone {
+    /// zone 名，站点 location 的 `proxy_cache` 按此引用
+    pub name: String,
+    /// 磁盘缓存目录
+    pub path: String,
+    #[serde(default = "default_cache_levels")]
+    pub levels: String,
+    #[serde(default = "default_cache_keys_zone")]
+    pub keys_zone_size: String,
+    #[serde(default = "default_cache_max_size")]
+    pub max_size: String,
+    #[serde(default = "default_cache_inactive")]
+    pub inactive: String,
+    #[serde(default)]
+    pub use_temp_path: Option<bool>,
+    #[serde(default)]
+    pub loader_files: Option<u32>,
+    #[serde(default)]
+    pub loader_sleep: Option<String>,
+    #[serde(default)]
+    pub loader_threshold: Option<String>,
+    #[serde(default)]
+    pub manager_files: Option<u32>,
+    #[serde(default)]
+    pub manager_sleep: Option<String>,
+    #[serde(default)]
+    pub manager_threshold: Option<String>,
+    /// 追加到 `proxy_cache_path` 尾部的额外参数
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub extra: String,
+}
+
+fn default_cache_levels() -> String {
+    "1:2".to_string()
+}
+fn default_cache_keys_zone() -> String {
+    "32m".to_string()
+}
+fn default_cache_max_size() -> String {
+    "1g".to_string()
+}
+fn default_cache_inactive() -> String {
+    "60m".to_string()
+}
+
+/// 第三方 ngx cache purge 模块的清理白名单。
+///
+/// `proxy_cache_purge` 只能用在 location 里，故 http 级只渲染两个 map
+/// 供站点 location（或用户自定义 server）引用：
+/// `$zap_purge_method`（是否 PURGE 方法）+ `$zap_purge_acl`（来源 IP 是否放行）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NginxCachePurgeSpec {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub enabled: bool,
+    /// 允许清理的来源 IP / CIDR
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_ips: Vec<String>,
+    /// map 中命中时的变量名前缀（默认 zap_purge）
+    #[serde(default)]
+    pub var_prefix: Option<String>,
+}
+
+/// ModSecurity 等 http 级安全指令（需已 `load_module` 对应模块）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NginxSecuritySpec {
+    #[serde(default)]
+    pub modsecurity: Option<bool>,
+    #[serde(default)]
+    pub modsecurity_rules_file: Option<String>,
+    #[serde(default)]
+    pub add_header_csp: Option<String>,
+}
+
+/// 日志归档默认保留天数（site.log_rotate）
+fn default_keep_days() -> u32 {
+    30
+}
+
+/// 日志读取默认行数（site.log_read）
+fn default_log_lines() -> usize {
+    200
+}
+
+/// ACME HTTP-01
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AcmeChallengeEntry {
+    /// 挑战 token（文件名固定为该值）
+    pub token: String,
+    /// token + 账户指纹，验证端点取到的内容须与之一致
+    pub key_auth: String,
+}
+
+/// 镜像构建参数：`--build-arg KEY=VALUE`。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DockerBuildArg {
+    /// 参数名（`[A-Za-z_][A-Za-z0-9_]*`，由调用方校验）
+    pub key: String,
+    #[serde(default)]
+    pub value: String,
+}
+
+/// 反代 upstream 定义：vhost 渲染为 nginx `upstream <name> { ... }` 块。
+/// server 行一律以 `servers_ext` 表单字段维护（开发期不兼容旧版文本 servers）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UpstreamSpec {
+    /// 上游组名（字母/数字/下划线，渲染前会再校验）
+    pub name: String,
+    /// 表单化的 server 行
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub servers_ext: Vec<UpstreamServer>,
+    /// 负载均衡策略：空 = 默认（轮询）/ least_conn / ip_hash
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub balance: String,
+}
+
+/// upstream 内单个 server 行（表单化，渲染为
+/// `server <addr> [weight=n] [max_fails=n] [fail_timeout=Ns] [backup] [down];`）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UpstreamServer {
+    /// 上游地址：host:port / ip:port / http(s)://host[:port]
+    pub addr: String,
+    /// 权重（0 = 不设置，默认轮询权重 1）
+    #[serde(default)]
+    pub weight: u32,
+    /// 失败上限次数（0 = 不设置，默认 1）
+    #[serde(default)]
+    pub max_fails: u32,
+    /// 失败判定超时（秒，0 = 不设置）
+    #[serde(default)]
+    pub fail_timeout: u32,
+    /// 备用节点（仅在主节点不可用时启用）
+    #[serde(default)]
+    pub backup: bool,
+    /// 标记为停机（临时摘除，不参与转发）
+    #[serde(default)]
+    pub down: bool,
+}
+
+/// 自定义请求头（渲染为 `proxy_set_header <key> <value>;`）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HeaderSpec {
+    /// Header 名（字母/数字/_/-，可含 `$var`）
+    pub key: String,
+    /// Header 值（可含 nginx 变量，如 `$host`、`$remote_addr`）
+    pub value: String,
+}
+
+/// 自定义 location：反代（proxy）/ 跳转（redirect）/ 拒绝（deny）/
+/// 站点内目录（alias）/ 自由指令体（raw）。
+/// 新增字段均带默认值，旧 site_profile JSON 反序列化不受影响。
+/// 站点安全配置（渲染进 vhost 的 server 上下文）：WAF 开关 + 请求限速 + 并发限制。
+///
+/// 三个能力彼此独立，可单独开启；限速/限并发依赖 http 上下文的共享 zone
+/// （由执行端按站点幂等发布 `00-zap-limits-<site_id>.conf`，见 `site::ensure_limit_zones`）。
+fn default_true() -> bool {
+    true
+}
+
+fn default_waf_mode() -> u8 {
+    1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SiteSecuritySpec {
+    /// 该站点启用 WAF：仅当全局 WAF 可用时才真正渲染 `modsecurity on;`
+    #[serde(default)]
+    pub waf_enable: bool,
+    /// 站点级引擎：0 = 跟随全局 / 1 = On（拦截，默认）/ 2 = DetectionOnly（只记录不拦截）。
+    /// 非 0 时渲染进 `modsecurity_rules 'SecRuleEngine ...';`，站点可覆盖全局形态。
+    #[serde(default = "default_waf_mode")]
+    pub waf_mode: u8,
+    /// 限速 / WAF 白名单：IP 或 CIDR，逗号或换行分隔（如 `10.0.0.0/8, 1.2.3.4`）。
+    /// 命中后：限速 key 置空（不计数）+ WAF 关引擎（`ctl:ruleEngine=Off`）。
+    #[serde(default)]
+    pub whitelist: String,
+    /// 限速「干跑」：命中只写日志不拦截（`limit_req_dry_run on`，需 nginx ≥ 1.17.1）
+    #[serde(default)]
+    pub limit_dry_run: bool,
+    /// 该站点启用独立 WAF 审计日志：写到站点日志目录下的 `waf.log`（面板可查看/轮转）
+    #[serde(default = "default_true")]
+    pub waf_audit: bool,
+    /// 站点自定义 ModSecurity 规则（与引擎指令一起渲染进 `modsecurity_rules`）。
+    /// 属管理组能力：非管理员提交修改会被拒绝。
+    #[serde(default)]
+    pub waf_rules: String,
+    #[serde(default)]
+    pub limit_req_enable: bool,
+    /// 限速速率（每秒请求数，渲染为 `rate={n}r/s`）
+    #[serde(default)]
+    pub limit_req_rate: u32,
+    /// 突发放行数（渲染为 `burst={n} nodelay`）
+    #[serde(default)]
+    pub limit_req_burst: u32,
+    #[serde(default)]
+    pub limit_conn_enable: bool,
+    /// 单 IP 并发连接上限
+    #[serde(default)]
+    pub limit_conn_num: u32,
+}
+
+impl Default for SiteSecuritySpec {
+    fn default() -> Self {
+        Self {
+            waf_enable: false,
+            // 与反序列化缺省保持一致：新站点 WAF 形态默认「拦截」
+            waf_mode: default_waf_mode(),
+            waf_audit: default_true(),
+            whitelist: String::new(),
+            limit_dry_run: false,
+            waf_rules: String::new(),
+            limit_req_enable: false,
+            limit_req_rate: 0,
+            limit_req_burst: 0,
+            limit_conn_enable: false,
+            limit_conn_num: 0,
+        }
+    }
+}
+
+/// location 内的附加指令：白名单指令名 + 校验过的值。
+/// 面板下拉项由执行端白名单驱动，加参数只需改那张表。
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct LocDirective {
+    /// 指令名（必须在执行端白名单内，如 expires / access_log）
+    pub key: String,
+    /// 指令值；空串渲染成不带值的指令
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub value: String,
+}
+
+/// 附加指令的值形态（决定校验规则与面板输入控件）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocDirValue {
+    /// `on` / `off`
+    OnOff,
+    /// 时长：`30d` `12h` `max` `off` `-1` `epoch`
+    Duration,
+    /// 大小：`10m` `1g`
+    Size,
+    /// 自由值（禁 `;` `{}` `#` 与换行）
+    Token,
+    /// 响应头：`Name value`，末尾可选 `always`
+    Header,
+    /// 日志：`off` 或绝对路径（须在归属用户目录下）
+    PathOrOff,
+}
+
+/// 附加指令白名单条目：面板下拉项与执行端校验共用这一张表，加参数只改这里。
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct LocDirSpec {
+    /// nginx 指令名
+    pub key: &'static str,
+    /// 值形态
+    pub kind: LocDirValue,
+    /// 是否允许多条（nginx 里 expires 之类重复会报 duplicate）
+    pub multi: bool,
+    /// 面板上的一句话说明
+    pub hint: &'static str,
+    /// 示例值
+    pub sample: &'static str,
+}
+
+/// location 附加指令白名单。
+///
+/// 刻意不含 `alias` / `root` / `proxy_pass` / `return` / `include` / `rewrite`
+/// 等会改变 location 语义或读任意文件的指令——它们要么有专门的 kind，
+/// 要么会绕过路径校验。
+pub const LOC_DIRECTIVES: &[LocDirSpec] = &[
+    LocDirSpec {
+        key: "expires",
+        kind: LocDirValue::Duration,
+        multi: false,
+        hint: "浏览器缓存过期时间；off / -1 表示不缓存",
+        sample: "30d",
+    },
+    LocDirSpec {
+        key: "access_log",
+        kind: LocDirValue::PathOrOff,
+        multi: true,
+        hint: "访问日志：off 关闭，或指定日志文件路径",
+        sample: "off",
+    },
+    LocDirSpec {
+        key: "error_log",
+        kind: LocDirValue::PathOrOff,
+        multi: true,
+        hint: "错误日志：off 关闭，或指定日志文件路径",
+        sample: "off",
+    },
+    LocDirSpec {
+        key: "add_header",
+        kind: LocDirValue::Header,
+        multi: true,
+        hint: "追加响应头，末尾带 always 时错误响应也生效",
+        sample: "Cache-Control public",
+    },
+    LocDirSpec {
+        key: "try_files",
+        kind: LocDirValue::Token,
+        multi: false,
+        hint: "静态文件回退查找，常用于前端路由兜底",
+        sample: "$uri $uri/ /index.html",
+    },
+    LocDirSpec {
+        key: "index",
+        kind: LocDirValue::Token,
+        multi: false,
+        hint: "默认首页文件名（多个空格分隔，按顺序尝试）",
+        sample: "index.html index.htm",
+    },
+    LocDirSpec {
+        key: "gzip",
+        kind: LocDirValue::OnOff,
+        multi: false,
+        hint: "gzip 压缩响应",
+        sample: "on",
+    },
+    LocDirSpec {
+        key: "gzip_static",
+        kind: LocDirValue::OnOff,
+        multi: false,
+        hint: "存在同名 .gz 时直接发送预压缩文件",
+        sample: "on",
+    },
+    LocDirSpec {
+        key: "etag",
+        kind: LocDirValue::OnOff,
+        multi: false,
+        hint: "ETag 协商缓存",
+        sample: "on",
+    },
+    LocDirSpec {
+        key: "if_modified_since",
+        kind: LocDirValue::Token,
+        multi: false,
+        hint: "协商缓存比对方式：exact / before / off",
+        sample: "exact",
+    },
+    LocDirSpec {
+        key: "sendfile",
+        kind: LocDirValue::OnOff,
+        multi: false,
+        hint: "零拷贝发送静态文件",
+        sample: "on",
+    },
+    LocDirSpec {
+        key: "tcp_nopush",
+        kind: LocDirValue::OnOff,
+        multi: false,
+        hint: "与 sendfile 配合，凑满一个包再发",
+        sample: "on",
+    },
+    LocDirSpec {
+        key: "autoindex",
+        kind: LocDirValue::OnOff,
+        multi: false,
+        hint: "目录列表（公开目录谨慎开启）",
+        sample: "off",
+    },
+    LocDirSpec {
+        key: "client_max_body_size",
+        kind: LocDirValue::Size,
+        multi: false,
+        hint: "该 location 的请求体上限",
+        sample: "10m",
+    },
+    LocDirSpec {
+        key: "charset",
+        kind: LocDirValue::Token,
+        multi: false,
+        hint: "响应字符集",
+        sample: "utf-8",
+    },
+];
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LocationSpec {
+    /// location 匹配路径，必须以 `/` 开头（如 `/`、`/api`）；不支持正则前缀
+    pub path: String,
+    /// location 匹配方式：
+    /// - 空：前缀匹配（`location /api`，会连 `/api-docs` 一起命中）
+    /// - `exact`：精确匹配（`location = /api`，只命中 `/api` 本身）
+    /// - `prefer`：优先前缀（`location ^~ /api`，命中前缀且跳过正则 location）
+    #[serde(default)]
+    pub match_mode: String,
+    /// proxy | redirect | deny | alias | raw
+    pub kind: String,
+    /// proxy：upstream 名 或 `http(s)://host[:port][/uri]`；
+    /// redirect：跳转目标 URL；deny：目标为空；alias：站点内静态目录；
+    /// raw：忽略，使用 `raw` 指令体
+    pub target: String,
+    /// redirect：跳转状态码（301/302，0 视为 301）；deny：拒绝状态码（403/404/410/444，0 视为 403）
+    #[serde(default)]
+    pub code: u16,
+    /// proxy 时是否启用 WebSocket 升级（proxy_http_version 1.1 + Upgrade 头）
+    #[serde(default)]
+    pub ws: bool,
+    /// proxy 时剥离 location 前缀（proxy_pass 带 URI）：
+    /// `location /njs` + 开启 → `proxy_pass http://127.0.0.1:8000/;`，
+    /// `/njs/a` 转发给后端变成 `/a`；关闭则原样转发（后端收到 `/njs/a`）
+    #[serde(default)]
+    pub strip_prefix: bool,
+    // ── 高级参数（serde default，兼容旧数据）──
+    /// kind=raw 时直接渲染的 location 指令体（多行 nginx 指令，逐行原样输出）
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub raw: String,
+    /// proxy_connect_timeout（秒，0 = 不输出）
+    #[serde(default)]
+    pub conn_timeout: u32,
+    /// proxy_read_timeout（秒，0 = 不输出）
+    #[serde(default)]
+    pub read_timeout: u32,
+    /// proxy_send_timeout（秒，0 = 不输出）
+    #[serde(default)]
+    pub send_timeout: u32,
+    /// 追加的自定义请求头（proxy_set_header）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headers: Vec<HeaderSpec>,
+    /// proxy_redirect 指令（off / 替换规则；空 = 不输出）
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub proxy_redirect: String,
+    /// 反代缓存：填 `zap_cache` 启用（由执行端自动创建共享缓存区）；
+    /// 空 = 不缓存。仅固定白名单值。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cache: String,
+    /// proxy_cache_valid 规则（如 `200 5m`；空 = 不输出）
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cache_valid: String,
+    /// 关闭代理缓冲（proxy_buffering off，SSE / 流式输出场景）
+    #[serde(default)]
+    pub no_buffering: bool,
+    // ── location 级限速 / 限并发（0 = 不限；会为该 location 生成专属 zone）──
+    /// 请求限速速率（r/s）：写在 zone 上，故每个 location 用独立 zone
+    #[serde(default)]
+    pub limit_req_rate: u32,
+    /// 突发放行数（0 = 不允许突发）
+    #[serde(default)]
+    pub limit_req_burst: u32,
+    /// 突发策略：nodelay（默认，立即放行）/ delay（超出部分排队）
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub limit_req_mode: String,
+    /// 限速命中响应码（0 = nginx 默认 429）
+    #[serde(default)]
+    pub limit_req_status: u16,
+    /// 单 IP 并发上限
+    #[serde(default)]
+    pub limit_conn_num: u32,
+    /// 并发超限响应码（0 = nginx 默认 503）
+    #[serde(default)]
+    pub limit_conn_status: u16,
+    /// 下载速率上限（KB/s；0 = 不限）→ `limit_rate Nk`
+    #[serde(default)]
+    pub limit_rate: u32,
+    /// 前 N MB 不限速（0 = 不限）→ `limit_rate_after Nm`
+    #[serde(default)]
+    pub limit_rate_after: u32,
+    /// 限速 / 并发命中时的响应体（HTML；空 = nginx 默认页）
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub limit_body: String,
+    /// 该 location 关闭 WAF（modsecurity off；如上传接口、管理后台）
+    #[serde(default)]
+    pub no_waf: bool,
+    /// 本 location 限速「干跑」：命中只记日志不拦（`limit_req_dry_run on`）
+    #[serde(default)]
+    pub limit_dry_run: bool,
+    /// kind=alias（静态目录）时的挂载方式：
+    /// `alias`（默认，location 路径被目录替换）/ `root`（location 路径拼到目录之后）
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub static_mode: String,
+    /// 附加指令（白名单内）：如 expires / access_log / add_header，
+    /// 面板上可动态增删，值格式由执行端校验
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra: Vec<LocDirective>,
+    /// 应用部署自动挂载的 location 归属应用名（站点内唯一）。
+    /// 只用于面板识别「这条 location 是哪个应用挂的」，不渲染到 nginx。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub app_name: String,
+}
+
+/// Application Manager 支持的应用类型。
+/// 新增类型 = 这里加一项 + 执行端 `verbs/app.rs` 里加一个「依赖准备 + 默认启动命令」分支。
+/// 注：go / rust 为编译型语言，单版本、由管理员手动安装工具链；运行时是 workdir 下的
+/// 原生二进制，无需在 PATH 上保留工具链（仅构建阶段需要）。
+/// `generic` 为通用型：不编译、不准备依赖，由用户填写完整启动命令（如 `java -jar app.jar`），
+/// 适用于上传的 jar 包或其他任意语言 / 解释器；是否开放由套餐 `app_types` 白名单控制。
+pub const APP_TYPES: &[&str] = &["python", "nodejs", "static", "go", "rust", "generic"];
+
+/// 类型是否受支持（套餐里配置的白名单也会先用它过滤一次）
+pub fn app_type_supported(t: &str) -> bool {
+    APP_TYPES.contains(&t)
+}
+
+/// `zapd` -> `zapexec` 的请求。只有白名单动词，刻意不提供任意 shell 执行。
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "verb", rename_all = "snake_case")]
+pub enum Request {
+    /// 同步系统时钟（chrony / ntpdate）
+    #[serde(rename = "time.sync")]
+    TimeSync,
+    /// 设置系统时区
+    #[serde(rename = "time.set_timezone")]
+    TimeSetTimezone { timezone: String },
+    /// 列出可用时区
+    #[serde(rename = "time.list_timezones")]
+    TimeListTimezones,
+    /// 读取当前时间/时区
+    #[serde(rename = "time.get")]
+    TimeGet,
+    /// 读取 SSH 服务状态
+    #[serde(rename = "ssh.status")]
+    SshStatus,
+    /// 重启 SSH 服务
+    #[serde(rename = "ssh.restart")]
+    SshRestart,
+    /// 安装 SSH 服务端（openssh-server），日志写 run-{id}.log
+    #[serde(rename = "ssh.install")]
+    SshInstall { run_id: String },
+    /// 读取 sshd 配置文件（全文 + 是否通过 `sshd -t`）
+    #[serde(rename = "ssh.config_get")]
+    SshConfigGet { path: Option<String> },
+    /// 文件编辑模式：整份写回（`sshd -t` → 备份 → 落盘 → 可选重启,失败回滚）
+    #[serde(rename = "ssh.config_save")]
+    SshConfigSave {
+        path: Option<String>,
+        content: String,
+        #[serde(default)]
+        restart: bool,
+        /// 只跑 `sshd -t` 校验、不落盘（面板「校验」按钮）
+        #[serde(default)]
+        dry_run: bool,
+    },
+    /// 可视化模式：按 `Key=Value` 原地改键（保留注释 / Include / Match 块）
+    #[serde(rename = "ssh.config_apply")]
+    SshConfigApply {
+        path: Option<String>,
+        /// 待写入的 [key, value]；value 为空表示注释掉该指令（回退默认）
+        #[serde(default)]
+        set: Vec<(String, String)>,
+        #[serde(default)]
+        restart: bool,
+        /// 只跑 `sshd -t` 校验、不落盘
+        #[serde(default)]
+        dry_run: bool,
+    },
+    /// 列出系统服务（systemd）
+    #[serde(rename = "service.list")]
+    ServiceList,
+    /// 对系统服务执行操作（start/stop/restart/reload/enable/disable）
+    #[serde(rename = "service.action")]
+    ServiceAction { name: String, action: String },
+    /// 列出系统进程（ps）
+    #[serde(rename = "process.list")]
+    ProcessList,
+    /// 终止进程（signal 缺省为 TERM，9 表示 KILL）
+    #[serde(rename = "process.kill")]
+    ProcessKill { pid: u32, signal: Option<String> },
+    /// 把指定的公钥内容写入本机系统用户的 `~/.ssh/authorized_keys`（root 特权，
+    /// 用于「我的密钥」的本地回环授权，公钥内容由 zapd 鉴权后下发）
+    #[serde(rename = "ssh_key.install_pub")]
+    SshKeyInstallPub {
+        username: String,
+        public_key: String,
+    },
+    /// 生成面板用户自己的 SSH 密钥（存于该用户家目录 `~/.ssh/zap_<name>`，属主为用户本人）
+    #[serde(rename = "ssh_user_key.generate")]
+    SshUserKeyGenerate {
+        linux_user: String,
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        key_type: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        bits: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        comment: Option<String>,
+    },
+    /// 导入面板用户自己的 SSH 密钥（私钥写入用户家目录）
+    #[serde(rename = "ssh_user_key.import")]
+    SshUserKeyImport {
+        linux_user: String,
+        name: String,
+        private_key: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        public_key: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        comment: Option<String>,
+    },
+    /// 删除面板用户自己的 SSH 密钥（含 .pub）
+    #[serde(rename = "ssh_user_key.delete")]
+    SshUserKeyDelete { linux_user: String, name: String },
+    /// 读取用户家目录私钥内容（仅终端连接时使用，私钥不落 DB / 不返回前端列表）
+    #[serde(rename = "ssh_user_key.private_get")]
+    SshUserKeyPrivateGet { linux_user: String, name: String },
+    /// 读取用户家目录 ~/.ssh 下的 OpenSSH 默认私钥（id_ed25519 → id_ecdsa → id_rsa）。
+    /// 只扫描该用户自己的家目录，不回退到其他账户；私钥同样不落 DB
+    #[serde(rename = "ssh_user_key.default_get")]
+    SshUserKeyDefaultGet { linux_user: String },
+    /// 读取用户家目录公钥内容
+    #[serde(rename = "ssh_user_key.public_get")]
+    SshUserKeyPublicGet { linux_user: String, name: String },
+    /// 列出用户家目录下全部面板密钥（`~/.ssh/zap_<name>.pub`）。
+    /// 密钥只存家目录文件、不落 DB，故列表一律以磁盘扫描为准
+    #[serde(rename = "ssh_user_key.list")]
+    SshUserKeyList { linux_user: String },
+    /// 读取主机名与 DNS 解析器配置
+    #[serde(rename = "network.get")]
+    NetworkGet,
+    /// 设置主机名
+    #[serde(rename = "network.set_hostname")]
+    NetworkSetHostname { hostname: String },
+    /// 设置 DNS Resolver（nameserver / search 写入 /etc/resolv.conf）
+    #[serde(rename = "network.set_resolver")]
+    NetworkSetResolver {
+        nameservers: Vec<String>,
+        #[serde(default)]
+        search: Vec<String>,
+    },
+    /// 列出目录
+    #[serde(rename = "file.list")]
+    FileList {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        as_user: Option<String>,
+        #[serde(default)]
+        skip_owner_check: bool,
+    },
+    /// 读文件（文本）
+    #[serde(rename = "file.read")]
+    FileRead {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        as_user: Option<String>,
+        #[serde(default)]
+        skip_owner_check: bool,
+    },
+    /// 写文件（文本）
+    ///
+    /// `as_user`：以哪个 Linux 账号名义操作（None = root）；新建/覆盖的内容归属该账号。
+    /// `skip_owner_check`：管理员置 true —— 内容归属自己，但仍可管理服务器上 root 的文件；
+    /// 普通用户保持 false（只能删改本人文件）。
+    #[serde(rename = "file.write")]
+    FileWrite {
+        path: String,
+        content: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        as_user: Option<String>,
+        #[serde(default)]
+        skip_owner_check: bool,
+    },
+    /// 删除文件/目录
+    #[serde(rename = "file.delete")]
+    FileDelete {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        as_user: Option<String>,
+        #[serde(default)]
+        skip_owner_check: bool,
+    },
+    /// 建目录
+    #[serde(rename = "file.mkdir")]
+    FileMkdir {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        as_user: Option<String>,
+        #[serde(default)]
+        skip_owner_check: bool,
+    },
+    /// 重命名
+    #[serde(rename = "file.rename")]
+    FileRename {
+        path: String,
+        new_path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        as_user: Option<String>,
+        #[serde(default)]
+        skip_owner_check: bool,
+    },
+    /// 下载（base64 字节）
+    #[serde(rename = "file.download")]
+    FileDownload {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        as_user: Option<String>,
+        #[serde(default)]
+        skip_owner_check: bool,
+    },
+    /// 上传：把 zapd 已落盘的临时文件搬到目标目录。
+    ///
+    /// 早先这里传的是 base64 全文，等于把整个文件塞进 zapd 内存再放大 1.33 倍；
+    /// 现在 zapd 边收边写临时文件（`{data}/tmp/upload/`），exec 侧只负责搬移与
+    /// 归属处理，大文件不再受内存约束。
+    #[serde(rename = "file.upload")]
+    FileUpload {
+        path: String,
+        name: String,
+        /// zapd 侧已完整写入的临时文件绝对路径（搬完由 exec 删除）
+        tmp: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        as_user: Option<String>,
+        #[serde(default)]
+        skip_owner_check: bool,
+    },
+    /// 文件信息
+    #[serde(rename = "file.info")]
+    FileInfo {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        as_user: Option<String>,
+        #[serde(default)]
+        skip_owner_check: bool,
+    },
+    /// 计算目录大小（递归累计字节数；符号链接不跟随，避免环与重复统计）
+    #[serde(rename = "file.dir_size")]
+    DirSize {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        as_user: Option<String>,
+        #[serde(default)]
+        skip_owner_check: bool,
+    },
+    /// 修改文件/目录权限（mode 为八进制数值，仅低 12 位有效）
+    #[serde(rename = "file.chmod")]
+    FileChmod {
+        path: String,
+        mode: u32,
+        /// 递归应用到目录下的所有子项
+        #[serde(default)]
+        recursive: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        as_user: Option<String>,
+        #[serde(default)]
+        skip_owner_check: bool,
+    },
+    /// 修改文件/目录属主与属组（仅 admin）。`owner`/`group` 为 Linux 名称，None 表示不改该项。
+    #[serde(rename = "file.chown")]
+    FileChown {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owner: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group: Option<String>,
+        /// 递归应用到目录下的所有子项
+        #[serde(default)]
+        recursive: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        as_user: Option<String>,
+        #[serde(default)]
+        skip_owner_check: bool,
+    },
+    /// 复制文件/目录（递归）
+    #[serde(rename = "file.copy")]
+    FileCopy {
+        path: String,
+        new_path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        as_user: Option<String>,
+        #[serde(default)]
+        skip_owner_check: bool,
+    },
+    /// 打包 zip：给出 `dest_dir` 就把压缩包写到该目录（打包到目录），
+    /// 否则返回 zip 的 base64 内容供调用方下载。
+    #[serde(rename = "file.archive")]
+    FileArchive {
+        paths: Vec<String>,
+        name: String,
+        base_dir: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dest_dir: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        as_user: Option<String>,
+        #[serde(default)]
+        skip_owner_check: bool,
+    },
+    /// 解压压缩包到目标目录：支持 zip / tar / tar.gz / tgz。
+    /// `dest_dir` 为解压目标目录；`overwrite` 为 true 时覆盖同名文件。
+    #[serde(rename = "file.extract")]
+    FileExtract {
+        path: String,
+        dest_dir: String,
+        #[serde(default)]
+        overwrite: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        as_user: Option<String>,
+        #[serde(default)]
+        skip_owner_check: bool,
+    },
+    /// 添加 AppStore Git 源（clone 到 data/appstore/repos/<id>/）
+    #[serde(rename = "appstore.repo_add")]
+    AppstoreRepoAdd {
+        name: String,
+        url: String,
+        run_id: String,
+    },
+    /// 删除 AppStore Git 源（内置源禁止删除）
+    #[serde(rename = "appstore.repo_remove")]
+    AppstoreRepoRemove { id: String },
+    /// 更新单个 AppStore Git 源（clone/fetch + reset）
+    #[serde(rename = "appstore.repo_update")]
+    AppstoreRepoUpdate { id: String, run_id: String },
+    /// 安装包：执行包的 install.sh（或 app.yaml 指定脚本）
+    #[serde(rename = "appstore.install")]
+    AppstoreInstall {
+        /// 形如 database/mariadb 的包相对路径
+        pkg_path: String,
+        /// custom | official
+        source: String,
+        /// 包来源的 git 源 id（source=official 时定位 repos/<repo_id>/）
+        #[serde(skip_serializing_if = "Option::is_none")]
+        repo_id: Option<String>,
+        version: String,
+        /// 用户点击的操作（app.yaml actions 键，如 bin/build），透传给安装脚本的 ACTION 环境变量
+        #[serde(skip_serializing_if = "Option::is_none")]
+        action: Option<String>,
+        /// 用户在安装表单中填写的选项（app.yaml options，键=选项名，值=字符串化表单值）
+        #[serde(skip_serializing_if = "Option::is_none")]
+        options: Option<BTreeMap<String, String>>,
+        /// 实例名：同一个包的多个安装靠它区分（多版本 PHP → `74` / `83`；
+        /// 站点类 → `site:<站点id>`）。缺省 `default`（老版本安装就是这个）。
+        #[serde(skip_serializing_if = "Option::is_none")]
+        instance: Option<String>,
+        /// 发起操作的面板登录用户名（注入 ZAP_USER，供安装脚本按操作者归属）
+        #[serde(skip_serializing_if = "Option::is_none")]
+        user: Option<String>,
+        /// 面板侧编排结果（建站 / 建库），由 zapd 在入队前准备好并注入脚本 env。
+        ///
+        /// 键即环境变量名（`SITE_ROOT` / `DB_NAME` / `DB_PASS` …）。与 `options` 的区别：
+        /// 这些值由面板产生（不是用户手填），可能含数据库密码，因此**不落 options.env /
+        /// options.json**，只进子进程环境（run.json 由 zapexec 以 0600 写出）。
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provision: Option<BTreeMap<String, String>>,
+        /// 虚拟主机运行模式：固定 system（每个面板用户一个独立 Linux 账号）；注入 ZAP_RUN_MODE
+        #[serde(skip_serializing_if = "Option::is_none")]
+        run_mode: Option<String>,
+        run_id: String,
+    },
+    /// 卸载包：执行 uninstall.sh 并删除已安装目录
+    #[serde(rename = "appstore.uninstall")]
+    AppstoreUninstall {
+        pkg_path: String,
+        /// 用户在卸载表单中填写的选项（app.yaml options.uninstall，键=选项名，值=字符串化表单值）
+        #[serde(skip_serializing_if = "Option::is_none")]
+        options: Option<BTreeMap<String, String>>,
+        /// 实例名：同一个包的多个安装靠它区分（多版本 PHP → `74` / `83`；
+        /// 站点类 → `site:<站点id>`）。缺省 `default`（老版本安装就是这个）。
+        #[serde(skip_serializing_if = "Option::is_none")]
+        instance: Option<String>,
+        /// 安装时面板编排结果（站点 / 数据库），卸载时回传以便脚本备份或清理
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provision: Option<BTreeMap<String, String>>,
+        /// 发起操作的面板登录用户名（注入 ZAP_USER）
+        #[serde(skip_serializing_if = "Option::is_none")]
+        user: Option<String>,
+        /// 虚拟主机运行模式：固定 system（每个面板用户一个独立 Linux 账号）；注入 ZAP_RUN_MODE
+        #[serde(skip_serializing_if = "Option::is_none")]
+        run_mode: Option<String>,
+        run_id: String,
+    },
+    /// 升级包：执行 upgrade.sh（缺省时先 uninstall.sh 再 install.sh）
+    #[serde(rename = "appstore.upgrade")]
+    AppstoreUpgrade {
+        pkg_path: String,
+        source: String,
+        /// 包来源的 git 源 id（source=official 时定位 repos/<repo_id>/）
+        #[serde(skip_serializing_if = "Option::is_none")]
+        repo_id: Option<String>,
+        version: String,
+        old_version: String,
+        /// 用户点击的操作（app.yaml actions 键），透传给升级脚本的 ACTION 环境变量
+        #[serde(skip_serializing_if = "Option::is_none")]
+        action: Option<String>,
+        /// 升级表单选项（键=选项名，值=字符串化表单值）；缺省复用安装选项定义
+        #[serde(skip_serializing_if = "Option::is_none")]
+        options: Option<BTreeMap<String, String>>,
+        /// 实例名：同一个包的多个安装靠它区分（多版本 PHP → `74` / `83`；
+        /// 站点类 → `site:<站点id>`）。缺省 `default`（老版本安装就是这个）。
+        #[serde(skip_serializing_if = "Option::is_none")]
+        instance: Option<String>,
+        /// 安装时的编排结果（站点 / 数据库）：升级脚本要接着用同一个站点与库，
+        /// 与 uninstall 同源（provision.json，取不到时由 info.yaml 兜底）
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provision: Option<BTreeMap<String, String>>,
+        /// 发起操作的面板登录用户名（注入 ZAP_USER）
+        #[serde(skip_serializing_if = "Option::is_none")]
+        user: Option<String>,
+        /// 虚拟主机运行模式：固定 system（每个面板用户一个独立 Linux 账号）；注入 ZAP_RUN_MODE
+        #[serde(skip_serializing_if = "Option::is_none")]
+        run_mode: Option<String>,
+        run_id: String,
+    },
+    /// 运行自定义脚本（仅限 `{data}/users/<username>/scripts/` 内）
+    #[serde(rename = "appstore.script_run")]
+    AppstoreScriptRun {
+        path: String,
+        run_id: String,
+        username: String,
+    },
+    /// 停止运行中的任务（按 run_id 杀进程组）
+    #[serde(rename = "appstore.script_stop")]
+    AppstoreScriptStop { run_id: String },
+    /// 终止运行中的部署任务：按日志路径找到 pid 文件，向进程组发 SIGTERM/SIGKILL。
+    #[serde(rename = "app.deploy_stop")]
+    AppDeployStop { log_path: String },
+    /// 读取自定义脚本内容（编辑前读取）
+    #[serde(rename = "appstore.script_read")]
+    AppstoreScriptRead { path: String, username: String },
+    /// 写自定义脚本（仅限 `{data}/users/<username>/scripts/` 内）
+    #[serde(rename = "appstore.script_write")]
+    AppstoreScriptWrite {
+        path: String,
+        content: String,
+        username: String,
+    },
+    /// 删除自定义脚本或目录（仅限 `{data}/users/<username>/scripts/` 内）
+    #[serde(rename = "appstore.script_delete")]
+    AppstoreScriptDelete { path: String, username: String },
+    /// 列出一次运行的可编辑脚本快照（runs/<run_id>/pkg/ 递归文件树）
+    #[serde(rename = "appstore.run_files")]
+    AppstoreRunFiles { run_id: String },
+    /// 读取运行快照内文件（仅限 runs/<run_id>/pkg/ 内）
+    #[serde(rename = "appstore.run_file_read")]
+    AppstoreRunFileRead { run_id: String, path: String },
+    /// 写运行快照内文件（仅限 runs/<run_id>/pkg/ 内，用于修改脚本后重跑）
+    #[serde(rename = "appstore.run_file_write")]
+    AppstoreRunFileWrite {
+        run_id: String,
+        path: String,
+        content: String,
+    },
+    /// 重跑某次失败的运行：复用其可编辑脚本快照（runs/<old_run_id>/pkg/），
+    /// 以 new_run_id 新建日志/pid 重新执行原安装/卸载/升级动作。
+    #[serde(rename = "appstore.run_retry")]
+    AppstoreRunRetry { run_id: String, new_run_id: String },
+    /// 扫描已安装应用列表（data/apps/*/meta.yaml + info.yaml + 运行状态）
+    #[serde(rename = "appstore.installed")]
+    AppstoreInstalled,
+    /// 对已安装应用的实例执行启停（start/stop/restart，走其登记的 systemd 服务）
+    #[serde(rename = "appstore.instance_action")]
+    AppstoreInstanceAction {
+        /// 形如 application/php 的包路径
+        pkg_path: String,
+        /// 实例名（缺省 default；站点类为 `site:<id>`）
+        #[serde(skip_serializing_if = "Option::is_none")]
+        instance: Option<String>,
+        /// start | stop | restart
+        action: String,
+    },
+    /// 同步站点 Nginx vhost：按站点渲染 conf 文件并 reload（幂等）
+    #[serde(rename = "site.vhost_sync")]
+    SiteVhostSync {
+        /// site 表主键（vhost 文件名 zap-site-{id}.conf）
+        site_id: i64,
+        /// 站点名称（sanitize 后用于文档根目录名）
+        name: String,
+        /// 站点域名列表（server_name，多个以空格分隔）
+        domains: Vec<String>,
+        /// true 生成 vhost；false 移除 vhost（站点停用）
+        /// 与 `mode` 同时存在时以 `mode` 为准（兼容老版本 zapd）
+        enabled: bool,
+        /// 站点运行状态：`running`（正常发布）/`stopped`（只撤下 sites-enabled 软链，
+        /// 配置留在 sites-available 可秒级恢复）/`maintenance`（发布 503 维护页）。
+        /// None 时按 `enabled` 回退为 running 或 stopped（兼容老版本 zapd）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<String>,
+        /// PHP-FPM 通道（如 unix:/var/run/php-fpm-8.3.sock 或 127.0.0.1:9000）；
+        /// None 表示纯静态站点，不生成 PHP location
+        #[serde(skip_serializing_if = "Option::is_none")]
+        php_socket: Option<String>,
+        /// 默认首页（空格分隔的文件名列表，按序匹配；如 `index.php index.html`）；
+        /// None/空 = 执行端按站点类型取默认（PHP 站 `index.php index.html`，静态站 `index.html`）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index_files: Option<String>,
+        /// 站点文档根目录（面板按归属用户家目录规划并入库，如 /home/u/www/blog-1）；
+        /// None 时回退 {ZAP_PATH}/data/www/{sanitize(name)}-{site_id}
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        web_root: Option<String>,
+        /// 站点日志目录（access.log / error.log 所在）；
+        /// None 时 vhost 不生成日志指令（沿用 nginx 全局日志）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        log_root: Option<String>,
+        /// 站点文件属主（Linux 账号名）；Some 时 web_root 整树归 `{owner}:{owner 主组}`
+        /// （目录 755 / 文件 644，nginx 走 others 位读静态文件，不归属 www 组），
+        /// log_root 整树仍归 www:www（目录 770 / 文件 660，nginx 写日志）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owner_user: Option<String>,
+        /// 站点类型：php（PHP/PHP+静态，默认）/ static（纯静态）/ proxy（反向代理）。
+        /// proxy 类型忽略 web_root/php，按 locations 渲染反代规则。
+        #[serde(default)]
+        site_type: String,
+        /// web_root 是否为用户在归属家目录下选择的「已有目录」：
+        /// true 时不自动创建目录、不写入默认 index.html
+        #[serde(default)]
+        web_root_custom: bool,
+        /// 自定义 upstream 组（渲染于 server 块之前）
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        upstreams: Vec<UpstreamSpec>,
+        /// 自定义 location（按提交顺序渲染，排在默认 location 之前）
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        locations: Vec<LocationSpec>,
+        /// SSL/TLS：站点绑定的证书库证书内容（fullchain = 叶子 + 中间链 PEM）。
+        /// Some 时由 zapexec 落盘并渲染 listen 443 ssl；None = 不启用 HTTPS。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssl_fullchain: Option<String>,
+        /// SSL/TLS：证书私钥 PEM（与 ssl_fullchain 成对出现）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssl_key: Option<String>,
+        /// 允许 HTTP 跳转到 HTTPS（仅 SSL 启用时生效：80 端口只保留 301 跳转）
+        #[serde(default)]
+        force_https: bool,
+        /// TLS 协议版本（空格分隔的 nginx ssl_protocols 值，如 "TLSv1.2 TLSv1.3"）；
+        /// 空串时由执行端回退为 TLSv1.2 TLSv1.3
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        ssl_protocols: String,
+        /// SSL 密码套件（nginx ssl_ciphers 值）；空串 = 不输出 ssl_ciphers 指令（跟随执行端默认）
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        ssl_ciphers: String,
+        /// 服务端密码套件优先（ssl_prefer_server_ciphers，仅影响 TLSv1.2）
+        #[serde(default, skip_serializing_if = "is_false")]
+        ssl_prefer_server_ciphers: bool,
+        /// 是否启用 HTTP/2（nginx ≥ 1.25.1 渲染 `http2 on;`，旧版回退 `listen 443 ssl http2`）
+        #[serde(default, skip_serializing_if = "is_false")]
+        ssl_http2: bool,
+        /// 共享主机 IPv4：非空时 vhost 监听 `listen {ip}:80` / `listen {ip}:443 ssl`
+        /// （来自面板基础设置的「默认 IPv4」）；空 = 沿用 `listen 80`（通配所有地址）。
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        listen_ipv4: String,
+        /// 共享主机 IPv6：非空时 vhost 监听 `listen [{ip}]:80` / `listen [{ip}]:443 ssl`；
+        /// 空 = 沿用 `listen [::]:80`。
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        listen_ipv6: String,
+        /// 站点独立绑定的 IP 列表（来自 IP 池，按归属分配；多用户多 IP 隔离的关键）。
+        /// 非空时 vhost 仅监听这些 IP（不再使用上面的共享主机 IPv4/IPv6 通配），
+        /// 每个 IP 渲染为 `listen <ip>:<port>`（IPv6 自动加方括号）；空 = 沿用共享主机 IP 行为。
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        site_ips: Vec<String>,
+        /// 站点安全配置（WAF / 限速 / 限并发）；None = 不渲染安全片段（兼容老版本 zapd）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        security: Option<SiteSecuritySpec>,
+    },
+    /// 列出目录下的子目录（root 特权）：供面板站点「选择已有站点目录」浏览。
+    /// 仅返回目录名（不含点目录），路径必须为绝对路径且存在。
+    #[serde(rename = "fs.browse_dirs")]
+    FsBrowseDirs { base: String },
+    /// 批量统计目录占用的字节数（root 特权）：`du -sb`。
+    /// zapd 以 zapadm 运行，而用户家目录多为 0700（属主为各自的 Linux 账号），
+    /// 面板进程 du 读不到，必须由 root 代跑。
+    /// 返回 `data.usage`：`{ 绝对路径: 字节数 }`；读不到的路径（不存在 / 统计失败）不出现在结果里。
+    #[serde(rename = "fs.disk_usage")]
+    FsDiskUsage {
+        /// 待统计的目录（绝对路径；非法 / 越权路径会被执行端直接丢弃）
+        paths: Vec<String>,
+    },
+    /// 站点 nginx 日志轮转（root）：按天把 access.log / error.log 切割为
+    /// `{kind}.log-YYYYMMDD` 并 gzip 归档，清理超期归档，最后通知 nginx 重新打开日志。
+    /// 同时轮转全局 WAF 审计日志（`SecAuditLog` 指向的文件，如 `/var/log/modsec_audit.log`，
+    /// 该文件由 ModSecurity 持有 fd、不随 nginx reopen 重开，故用 copytruncate）。
+    #[serde(rename = "site.log_rotate")]
+    SiteLogRotate {
+        /// 待轮转的站点日志目录（面板规划 `{home}/logs/{site_id}-{name}`）
+        log_roots: Vec<String>,
+        /// 归档保留天数（超过即删除）
+        #[serde(default = "default_keep_days")]
+        keep_days: u32,
+    },
+    /// 站点日志归档列表（`access.log-YYYYMMDD.gz` / `error.log-YYYYMMDD.gz`）
+    #[serde(rename = "site.log_list")]
+    SiteLogList { log_root: String },
+    /// 读取站点日志（当前日志或归档）尾部行，支持关键词 / 状态码过滤
+    #[serde(rename = "site.log_read")]
+    SiteLogRead {
+        /// 站点日志目录
+        log_root: String,
+        /// access | error（空 = access）
+        #[serde(default)]
+        kind: String,
+        /// 归档文件名（空 = 当前日志）
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        archive: String,
+        /// 返回的最大行数（从文件尾部取）
+        #[serde(default = "default_log_lines")]
+        lines: usize,
+        /// 关键词过滤（空 = 不过滤）
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        keyword: String,
+        /// access.log 状态码过滤（如 `404`；空 = 不过滤）
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        status: String,
+    },
+    /// 清空站点当前日志（truncate）并通知 nginx 重新打开
+    #[serde(rename = "site.log_clear")]
+    SiteLogClear {
+        /// 站点日志目录
+        log_root: String,
+        /// access | error；空 = 两者都清空
+        #[serde(default)]
+        kind: String,
+    },
+    /// 站点日志：按 unique_id 反查 WAF 审计明细（租户日志界面用）。
+    /// 复用全局 WAF 审计日志（`SecAuditLog`），仅支持 unique_id 反查，刻意不暴露尾部模式，
+    /// 以免向租户泄露其它租户的审计记录。unique_id 取自 error_log 命中行末尾 `[unique_id "..."]`。
+    #[serde(rename = "site.log_audit")]
+    SiteLogAudit {
+        /// 要反查的 unique_id
+        unique_id: String,
+    },
+    /// 部署（或重新部署）站点应用：准备运行时依赖 -> 写 systemd unit -> 重新启动。
+    /// 幂等：同一个 (site_id, name) 重复调用即「改配置后重新部署」。
+    #[serde(rename = "app.deploy")]
+    AppDeploy {
+        site_id: i64,
+        /// 应用名（站点内唯一，用于 unit 名 zap-app-{site_id}-{name}.service）
+        name: String,
+        /// python | nodejs | go | rust
+        app_type: String,
+        /// 运行时版本（如 `3.11` / `20`）；空 = 用系统默认版本
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        runtime_version: String,
+        /// 构建 / 编译命令（部署时先跑它，如 `npm run build`）；空 = 不构建
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        build_cmd: String,
+        /// python：是否在项目目录里生成虚拟环境（.venv）
+        #[serde(default)]
+        create_venv: bool,
+        /// 工作目录（必须是站点目录内的绝对路径，越界直接拒绝）
+        workdir: String,
+        /// 入口：python 用 `main.py` / `wsgi:app`，nodejs 用 `server.js`
+        #[serde(default)]
+        entry: String,
+        /// 自定义启动命令；非空则覆盖类型默认模板（如 `gunicorn -w 4 wsgi:app`）
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        command: String,
+        /// 应用监听端口（仅面板展示与反代提示，不参与 unit 渲染）
+        #[serde(default)]
+        port: i64,
+        /// 环境变量，每行一条 `KEY=VALUE`
+        #[serde(default)]
+        env: String,
+        /// 开机自启（systemctl enable）
+        #[serde(default)]
+        autostart: bool,
+        /// 是否重新安装依赖（python: pip install -r；nodejs: npm install）
+        #[serde(default)]
+        install_deps: bool,
+        /// 站点归属的 unix 用户：进程以它运行（永远不是 root）
+        owner_user: String,
+        /// 应用日志落盘目录（站点日志目录，属主为站点用户）
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        log_dir: String,
+        /// 请求方（面板用户）绑定的 Linux 账号：普通用户必须等于 `owner_user`，
+        /// 否则存在跨站点篡改他人应用的越权风险。管理员（[`skip_owner_check`]）
+        /// 不受此约束。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        requester: Option<String>,
+        /// 请求方是否为管理员：true 时跳过 `requester` 与 `owner_user` 的归属校验。
+        #[serde(default)]
+        skip_owner_check: bool,
+        /// 源代码仓库（公开仓库；为空 = 沿用现有 workdir，不做 git 操作）。
+        /// 部署时若 workdir 内无 `.git` 则 `git clone`，否则 `git pull` 拉取更新。
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        repo_url: String,
+        /// 分支（为空 = 执行端探测默认分支 main/master）
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        branch: String,
+        /// 指定提交 / 标签（clone 后 checkout，可选）
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        git_ref: String,
+        /// 仓库内子目录（应用根不在仓库根时用），相对仓库根
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        git_subdir: String,
+        /// 浅克隆深度（0 = 不浅克隆）
+        #[serde(default)]
+        git_depth: i64,
+        /// 静态型（app_type=static）：构建产物目录（相对 workdir）；
+        /// 为空时执行端自动探测 dist / build / public / _site / out / .output/public 之一
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        build_output: String,
+        /// 挂载点：站点上用哪个 location 前缀发布这个应用（默认 /）。
+        /// 静态型填子路径（如 /docs）可把静态站点部署到站点的子目录；
+        /// 非静态型即反代前缀。留空或 / 表示发布到站点根。
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        mount_path: String,
+        /// 挂载点匹配方式：空（默认）= 前缀匹配；`exact` = 精确匹配 `location = /path`；
+        /// `prefer` = 优先前缀 `location ^~ /path`
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        match_mode: String,
+        /// 反代时是否剥掉挂载前缀再转发（静态型忽略）。见 LocationSpec::strip_prefix
+        #[serde(default)]
+        strip_prefix: bool,
+        /// 部署任务日志文件路径（zapd 生成）。执行端把实时进度追加到这里，
+        /// 前端经 WebSocket 边读边显示（git clone / npm install 这类分钟级任务尤其需要）。
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        log_path: String,
+    },
+    /// 探测服务器上已安装的应用运行时版本（`python` / `nodejs`），供部署向导下拉选择
+    #[serde(rename = "app.runtimes")]
+    AppRuntimes,
+    /// Python 运行时管理（uv）：
+    /// - `detect`    列出 uv 状态与可用版本
+    /// - `install`   用 uv 装一个 Python 版本（如 `3.12`）
+    /// - `uninstall` 卸载 uv 管理的版本
+    #[serde(rename = "env.python")]
+    EnvPython {
+        /// detect | install | uninstall | install_uv | set_index
+        action: String,
+        #[serde(default)]
+        version: String,
+        /// 附加参数：`set_index` 时为 PyPI 源地址
+        #[serde(default)]
+        extra: String,
+    },
+    /// Node.js 运行时管理（fnm，装到全局供所有用户使用）：
+    /// - `detect`       列出 fnm 状态与可用版本
+    /// - `install_fnm`  一键安装 fnm（/usr/local/fnm）
+    /// - `install`      装一个 Node 版本（全局）
+    /// - `default`      设为全局默认（软链到 /usr/local/bin）
+    /// - `uninstall`    卸载版本
+    /// - `set_registry` 写 /etc/npmrc（npm 源，所有用户生效）
+    #[serde(rename = "env.nodejs")]
+    EnvNodejs {
+        action: String,
+        #[serde(default)]
+        version: String,
+        /// 附加参数：下载镜像（official / china）或 `set_registry` 时的 registry 地址
+        #[serde(default)]
+        extra: String,
+    },
+    /// 应用动作：start | stop | restart | enable | disable
+    #[serde(rename = "app.action")]
+    AppAction {
+        site_id: i64,
+        name: String,
+        /// start | stop | restart | enable | disable
+        action: String,
+    },
+    /// 批量查询应用实时状态（active / enabled / pid）
+    #[serde(rename = "app.status")]
+    AppStatus { site_id: i64, names: Vec<String> },
+    /// 删除应用：停服务 -> disable -> 删 unit -> daemon-reload
+    #[serde(rename = "app.remove")]
+    AppRemove { site_id: i64, name: String },
+    /// 读取应用日志尾部行（站点日志目录下的 app-{name}.log）
+    #[serde(rename = "app.log")]
+    AppLog {
+        site_id: i64,
+        name: String,
+        #[serde(default = "default_log_lines")]
+        lines: usize,
+    },
+    /// 防火墙状态：探测后端（firewalld / ufw / nftables / iptables）并返回规则列表
+    #[serde(rename = "firewall.status")]
+    FirewallStatus {
+        /// 面板自身监听端口（用于标记"受保护"规则，避免把自己锁在外面）
+        panel_port: u16,
+    },
+    /// 新增防火墙规则（放行 / 拒绝）
+    #[serde(rename = "firewall.rule_add")]
+    FirewallRuleAdd {
+        /// 1 - 65535
+        port: u16,
+        /// tcp | udp
+        proto: String,
+        /// accept | drop
+        action: String,
+        /// 来源地址（IP 或 CIDR）；空串表示不限制来源
+        #[serde(default)]
+        source: String,
+        /// 备注（firewalld 写入 rich rule / ufw 写入 comment）
+        #[serde(default)]
+        comment: String,
+        /// 面板自身监听端口（用于拒绝"拒绝面板端口"这类自杀式操作）
+        panel_port: u16,
+    },
+    /// 删除防火墙规则（id 由 status 返回，按后端语义解析）
+    #[serde(rename = "firewall.rule_delete")]
+    FirewallRuleDelete {
+        id: String,
+        /// 面板自身监听端口
+        panel_port: u16,
+    },
+    /// 修改防火墙规则：先按 id 删除旧规则，再按新参数新增（受保护规则不可改）
+    #[serde(rename = "firewall.rule_update")]
+    FirewallRuleUpdate {
+        /// 旧规则 id（由 status 返回）
+        id: String,
+        /// 新端口 1 - 65535
+        port: u16,
+        /// tcp | udp
+        proto: String,
+        /// accept | drop
+        action: String,
+        /// 来源地址（IP 或 CIDR）；空串表示不限制来源
+        #[serde(default)]
+        source: String,
+        /// 备注
+        #[serde(default)]
+        comment: String,
+        /// 面板自身监听端口（用于拒绝"拒绝面板端口"这类自杀式操作）
+        panel_port: u16,
+    },
+    /// 防火墙服务启停 / 开机自启：action = start | stop | enable | disable
+    #[serde(rename = "firewall.toggle")]
+    FirewallToggle { action: String },
+    /// 新增端口转发规则（DNAT：外部 <proto>/<listen_port> → <target_addr>:<target_port>）
+    #[serde(rename = "firewall.forward_add")]
+    FirewallForwardAdd {
+        /// tcp | udp
+        proto: String,
+        /// 对外监听端口 1 - 65535
+        listen_port: u16,
+        /// 目标地址（IP，不支持域名 / CIDR）
+        target_addr: String,
+        /// 目标端口 1 - 65535
+        target_port: u16,
+        /// 备注
+        #[serde(default)]
+        comment: String,
+        /// 面板自身监听端口（禁止把面板端口转发走，避免把自己锁在外面）
+        panel_port: u16,
+    },
+    /// 删除端口转发规则（id 由 firewall.status 返回，按后端语义解析）
+    #[serde(rename = "firewall.forward_delete")]
+    FirewallForwardDelete { id: String },
+    /// IP 黑名单：拒绝该 IP / CIDR 的全部入站流量（不限端口/协议）
+    #[serde(rename = "firewall.blacklist_add")]
+    FirewallBlacklistAdd {
+        ip: String,
+        #[serde(default)]
+        comment: String,
+    },
+    /// 删除黑名单条目（id 由 firewall.status 返回）
+    #[serde(rename = "firewall.blacklist_delete")]
+    FirewallBlacklistDelete { id: String },
+    /// IP 白名单：放行优先，命中后不再被黑名单 / IP Ban 封禁
+    #[serde(rename = "firewall.whitelist_list")]
+    FirewallWhitelistList,
+    #[serde(rename = "firewall.whitelist_add")]
+    FirewallWhitelistAdd {
+        ip: String,
+        #[serde(default)]
+        comment: String,
+    },
+    /// 删除白名单条目（id 由 firewall.status 返回）
+    #[serde(rename = "firewall.whitelist_delete")]
+    FirewallWhitelistDelete { id: String },
+    /// 导出防火墙规则（端口规则 + 转发 + 黑名单）为 JSON
+    #[serde(rename = "firewall.export")]
+    FirewallExport {
+        /// 面板自身监听端口（导出的 drop 规则可能含保护逻辑，需感知）
+        panel_port: u16,
+    },
+    /// 导入防火墙规则：payload 为 firewall.export 的 data 结构
+    #[serde(rename = "firewall.import")]
+    FirewallImport {
+        payload: serde_json::Value,
+        panel_port: u16,
+    },
+    /// 一键锁服：封禁全部入站，仅开放 SSH(22) / 80 / 443 / 面板端口。
+    /// unlock = true 时移除锁服规则、恢复默认放行。
+    #[serde(rename = "firewall.lockdown")]
+    FirewallLockdown {
+        /// 面板自身监听端口（白名单强制包含，防自锁）
+        panel_port: u16,
+        #[serde(default)]
+        unlock: bool,
+    },
+    /// IP Ban 读取日志（journal / 文件）。
+    /// 由 zapexec 以 root 读取，避免面板进程无 systemd-journal 权限时静默读不到。
+    #[serde(rename = "ban.log_read")]
+    BanLogRead {
+        /// 来源：auto（自动探测 sshd 日志）| journal:<units> | file:<path>
+        source: String,
+        /// 增量游标：journal 为 __CURSOR；file 为字节偏移字符串。空 = 首次（定位到最新）
+        cursor: String,
+    },
+
+    /// 系统日志查看器：列出可查看的日志源（内核 / 系统 / nginx / php / mysql / 面板 / 服务单元）。
+    /// 由 zapexec 以 root 探测 —— 面板进程通常没有 systemd-journal 与 /var/log 的读权限，
+    /// 直接 spawn journalctl 会静默返回空，所以探测与读取都走特权侧。
+    #[serde(rename = "syslog.sources")]
+    SysLogSources,
+    /// 系统日志查看器：按游标读取某个日志源的内容。
+    ///
+    /// `source` 取值见 [`SysLogSources`] 返回的 id：`journal:<unit>` / `journal:`（全部系统日志）/
+    /// `kernel:`（内核环，journald 不可用时退化为 dmesg）/ `file:<path>`。
+    #[serde(rename = "syslog.read")]
+    SysLogRead {
+        /// 日志源 id
+        source: String,
+        /// 增量游标：journal 为 `__CURSOR`；file 为字节偏移。空 = 首次，取末尾 `lines` 行
+        cursor: String,
+        /// 首次（cursor 空）取末尾的行数；上限 5000
+        #[serde(default)]
+        lines: u32,
+        /// 关键字过滤（大小写不敏感），空 = 不过滤
+        #[serde(default)]
+        keyword: String,
+    },
+
+    /// 系统日志查看器：列出**手动添加**的自定义日志路径。
+    /// 存在 `{ZAP_PATH}/data/logs/custom_sources.json`（zapexec 以 root 读写）。
+    #[serde(rename = "syslog.custom_list")]
+    SysLogCustomList,
+    /// 系统日志查看器：添加一个自定义日志路径。
+    ///
+    /// `path` 必须是绝对路径且不含 `..`（由 zapexec 校验）；管理员加的路径不额外做
+    /// 白名单限制 —— 能看全部系统日志本就是管理员的职责范围。
+    #[serde(rename = "syslog.custom_add")]
+    SysLogCustomAdd {
+        /// 展示名（可为空，缺省用文件名）
+        name: String,
+        /// 日志文件绝对路径
+        path: String,
+    },
+    /// 系统日志查看器：删除一个自定义日志路径（只删记录，不删日志文件）。
+    #[serde(rename = "syslog.custom_remove")]
+    SysLogCustomRemove { path: String },
+
+    /// 移除站点 Nginx vhost（站点删除时清理，幂等）
+    #[serde(rename = "site.vhost_remove")]
+    SiteVhostRemove { site_id: i64, name: String },
+    /// 删除站点数据目录（root 特权）：站点删除时若勾选「同时删除网站数据」，
+    /// 文档根（网站文件）与日志目录（access.log / error.log 及其归档）一起 rm -rf。
+    /// 安全边界由执行端兜底：路径须为绝对路径、不含 `..`，
+    /// 且位于用户家目录（/home/*）或面板数据目录（{ZAP_PATH}/data/{www,logs}）之内，
+    /// 不允许是这些容器目录本身。
+    #[serde(rename = "site.data_remove")]
+    SiteDataRemove {
+        /// 站点文档根（web_root）列表
+        web_roots: Vec<String>,
+        /// 站点日志目录（log_root）列表：随网站数据一并删除
+        log_roots: Vec<String>,
+    },
+    /// 探测服务器运行环境快照（OS / Web 服务器 / PHP / 数据库 / 工具链）
+    #[serde(rename = "env.detect")]
+    EnvDetect,
+    /// 初始化面板用户家目录骨架：mkdir -p {home_dir}/www {home_dir}/logs {home_dir}/tmp（root 特权）。
+    /// owner 为该面板用户对应的 Linux 账号：
+    /// home 711 owner {u}:{u}，www 755 owner {u}:{u 主组}（nginx worker 走 others 位读静态文件），
+    /// logs 770 owner www:www（nginx 写日志），tmp 700 owner {u}:{u}。
+    #[serde(rename = "user.home_init")]
+    UserHomeInit {
+        home_dir: String,
+        /// 运行账号（Linux 系统用户名），家目录树归该账号所有
+        owner: String,
+    },
+    /// 将用户家目录整体迁移到新挂载点（如 /home → /home2，磁盘扩容场景）。
+    /// 支持跨文件系统（mv 失败自动回退 cp -a + 清理源）；完成后按该账号重置属主，
+    /// 并同步更新系统账号家目录指针（usermod -d）。
+    #[serde(rename = "user.home_migrate")]
+    UserHomeMigrate {
+        /// 源家目录完整路径（绝对路径，不含 `..`）
+        src_home: String,
+        /// 目标家目录完整路径（须为挂载点下路径，basename 与源一致）
+        dest_home: String,
+        /// 运行账号（Linux 系统用户名）
+        owner: String,
+    },
+    /// 为面板用户创建 Linux 系统账号（useradd，nologin，home 指向 home_dir），幂等。
+    /// 每个面板用户对应一个 Linux 账号（nologin），在 user.add / 站点同步前调用。
+    #[serde(rename = "user.system_init")]
+    UserSystemInit {
+        /// Linux 账号名（须通过 zap_proto::linux_username 派生，调用方已校验）
+        linux_user: String,
+        /// 账号 home 目录（面板记录的 home_dir）
+        home_dir: String,
+    },
+    /// 移除 Linux 系统账号（删除面板用户时调用）。
+    /// 会先清掉该用户的 PHP-FPM pool 配置文件并 reload，再 userdel。
+    #[serde(rename = "user.system_remove")]
+    UserSystemRemove {
+        /// Linux 账号名
+        linux_user: String,
+    },
+    /// 设置 Linux 系统账号的磁盘配额（root 特权，best-effort）。
+    /// quota_mb = 0 表示取消配额（不限）。
+    /// 自动适配 ext 系列（setquota）与 xfs（xfs_quota）；工具缺失或文件系统未启用
+    /// quota 时返回错误，调用方（zapd）仅记录告警，不阻断用户创建流程。
+    #[serde(rename = "user.quota_set")]
+    UserQuotaSet {
+        /// Linux 账号名（须通过 zap_proto::linux_username 派生，调用方已校验）
+        linux_user: String,
+        /// 配额（MB，0 = 不限）
+        quota_mb: i64,
+    },
+    /// 按用户生成 PHP-FPM pool 配置并 reload（幂等）：
+    /// 写入 {php 安装}/etc/php-fpm.d/{linux_user}.conf，
+    /// listen unix:/var/run/php-fpm-{linux_user}-{php版本}.sock，worker 以 {linux_user} 运行，
+    /// 规格来自 spec（JSON 字符串，缺省用面板默认值）。
+    #[serde(rename = "php.pool_sync")]
+    PhpPoolSync {
+        /// PHP 实例标识（如 php8.3）
+        php_instance: String,
+        /// Linux 账号名（worker 运行身份 / pool 名 / socket 名）
+        linux_user: String,
+        /// 用户家目录（open_basedir / session / upload 隔离根）
+        home_dir: String,
+        /// fpm pool 规格 JSON 字符串；空 = 使用默认规格
+        spec: String,
+    },
+    /// 查询执行器自身信息（版本 / 安装目录），供系统更新页展示 zapexec 版本
+    #[serde(rename = "upgrade.info")]
+    UpgradeInfo,
+    /// 触发一次系统升级：在独立 systemd scope 中拉起 zapupgrade，
+    /// 由它在不依赖 zapd/zapexec 存活的前提下完成 校验/备份/替换/重启。
+    /// stage_dir：zapd 下载解包规整后的目录（须位于 {ZAP_PATH}/data/upgrade/stage/ 下）；
+    /// log_path：zapd 准备的日志文件（同数据区，upgrade/logs/ 下）。
+    #[serde(rename = "upgrade.run")]
+    UpgradeRun {
+        run_id: String,
+        stage_dir: String,
+        log_path: String,
+    },
+    /// 探测 Nginx 运行状态：安装位置 / 版本 / 主配置 / 运行态（未安装时返回 installed=false）
+    #[serde(rename = "nginx.status")]
+    NginxStatus,
+    /// 列出可编辑的 Nginx 配置文件（主配置 + conf 目录白名单，*.conf）
+    #[serde(rename = "nginx.conf_list")]
+    NginxConfList,
+    /// 读取某个白名单内 Nginx 配置文件的内容
+    #[serde(rename = "nginx.conf_read")]
+    NginxConfRead { path: String },
+    /// 保存配置：备份 → 写入 → `nginx -t` 校验 → 失败回滚 → 运行中则重载
+    #[serde(rename = "nginx.conf_save")]
+    NginxConfSave { path: String, content: String },
+    /// 干跑：把结构模型渲染成 nginx.conf 全文并返回（不写盘、不校验）
+    #[serde(rename = "nginx.global_preview")]
+    NginxGlobalPreview { spec_json: String },
+    /// 落盘：扫描冲突 → 渲染 → `nginx -t -c <tmp>` → 失败回滚 → 成功则备份旧文件、
+    /// 原子替换 → 运行中 reload。返回 { content, diff, warnings, reloaded }
+    #[serde(rename = "nginx.global_apply")]
+    NginxGlobalApply { spec_json: String },
+    /// 读取当前 nginx.conf 并返回结构模型（回填 default）
+    #[serde(rename = "nginx.global_spec")]
+    NginxGlobalSpec,
+    /// Nginx 服务控制：start / stop / restart / reload（优先 systemd unit nginx）
+    #[serde(rename = "nginx.control")]
+    NginxControl { action: String },
+    /// 设置默认站点（IP / 未匹配域名兜底）形态：
+    /// enable=false → 直接断开（444 / 443 拒握手，防串站）；
+    /// enable=true → IP / 未匹配域名展示欢迎页
+    #[serde(rename = "nginx.default_vhost")]
+    NginxDefaultVhost { enable: bool },
+    /// 查询 / 设置 Nginx 状态页 stub_status：
+    /// enable=None → 仅查询是否启用并采集指标；
+    /// enable=Some(true/false) → 开启 / 关闭状态页（托管于 127.0.0.1 本机端口）
+    #[serde(rename = "nginx.stub_status")]
+    NginxStubStatus { enable: Option<bool> },
+    /// 四层转发（stream）状态：是否支持 stream 模块 / 配置文件 / 是否已 include。
+    ///
+    /// 仅管理员可用：转发规则等于「把任意端口接到任意后端」，不当作普通能力开放。
+    #[serde(rename = "nginx.stream_status")]
+    NginxStreamStatus,
+    /// 应用四层转发配置：内容写盘 → `nginx -t` → 失败回滚 → 运行中则重载。
+    ///
+    /// `content` 为空表示无规则：删掉配置文件并从主配置里移除 include。
+    /// 内容由 zapd 端渲染（规则存在面板库里），exec 只负责安全地落盘与生效。
+    #[serde(rename = "nginx.stream_apply")]
+    NginxStreamApply { content: String },
+    /// 通用服务配置·状态探测（服务配置页：php / mysql / mariadb / docker，未安装时 installed=false）
+    #[serde(rename = "service_conf.status")]
+    ServiceConfStatus { service: String },
+    /// 通用服务配置·列出可编辑配置文件（主配置 + 配置目录白名单）
+    #[serde(rename = "service_conf.list")]
+    ServiceConfList { service: String },
+    /// 通用服务配置·读取指定配置文件内容（Query: path）
+    #[serde(rename = "service_conf.read")]
+    ServiceConfRead { service: String, path: String },
+    /// 通用服务配置·保存配置文件（备份 → 原子写入；可选校验由各服务定义决定）
+    #[serde(rename = "service_conf.save")]
+    ServiceConfSave {
+        service: String,
+        path: String,
+        content: String,
+    },
+    /// 通用服务配置·读取关键项表单（字段定义 + 当前值，写入主配置）
+    #[serde(rename = "service_conf.keys")]
+    ServiceConfKeys { service: String },
+    /// 通用服务配置·保存关键项（写入主配置文件托管区 / JSON 合并）
+    #[serde(rename = "service_conf.keys_save")]
+    ServiceConfKeysSave {
+        service: String,
+        keys: std::collections::BTreeMap<String, String>,
+    },
+    /// 通用服务配置·服务控制 start / stop / restart / reload
+    #[serde(rename = "service_conf.control")]
+    ServiceConfControl { service: String, action: String },
+    /// 通用服务配置·列出服务已安装的版本实例（php74 / php81 …），目前 php 可用
+    #[serde(rename = "service_conf.instances")]
+    ServiceConfInstances { service: String },
+    /// 通用服务配置·设置 / 取消某实例的「全局默认访问」（注册到 /usr/local/bin）
+    #[serde(rename = "service_conf.default")]
+    ServiceConfDefault { service: String, enable: bool },
+    /// 通用服务配置·列出 yaml 里注册的服务定义（内置 + /etc/zap/services 覆盖）。
+    /// 新增一个服务 = 丢一份 yaml，前端据此自动生成配置页入口。
+    #[serde(rename = "service_conf.defs")]
+    ServiceConfDefs,
+    /// PHP 扩展·清单：已启用 / 已编译未启用 / 内置，扩展目录与可用安装工具。
+    #[serde(rename = "php_ext.list")]
+    PhpExtList { service: String },
+    /// PHP 扩展·启用 / 禁用：写 / 删 php.d 下的 ini，成功后重载 php-fpm。
+    #[serde(rename = "php_ext.toggle")]
+    PhpExtToggle {
+        service: String,
+        name: String,
+        enable: bool,
+    },
+    /// PHP 扩展·安装（长任务：日志追加到 log_path，结束写 __ZAP_DONE__）。
+    #[serde(rename = "php_ext.install")]
+    PhpExtInstall {
+        service: String,
+        package: String,
+        version: String,
+        log_path: String,
+    },
+    /// PHP 扩展·卸载（长任务，日志约定同安装）。
+    #[serde(rename = "php_ext.remove")]
+    PhpExtRemove {
+        service: String,
+        name: String,
+        log_path: String,
+    },
+    /// ModSecurity（WAF）能力探测。
+    ///
+    /// WAF 是**可选能力**：面板不会为它重编 / 替换 nginx。这里如实回答三件事：
+    /// 装没装、缺什么、能不能自动装。未安装时其余 WAF 动词一律拒绝。
+    #[serde(rename = "waf.status")]
+    WafStatus,
+    /// WAF 安装（长任务，日志约定同 [`Request::PhpExtInstall`]）。
+    ///
+    /// 仅在 [`Request::WafStatus`] 判定"可安装"时才允许启动：编译 libmodsecurity
+    /// → 编 nginx 动态模块（要求 nginx 以 --with-compat 编译）→ 部署 OWASP CRS。
+    /// 规则引擎默认停在 DetectionOnly（只记录不拦截），避免装完就误杀业务请求。
+    #[serde(rename = "waf.install")]
+    WafInstall { log_path: String },
+    /// WAF 规则文件清单（modsecurity.d 下的 .conf / .data）。
+    #[serde(rename = "waf.conf_list")]
+    WafConfList,
+    /// 读取一个 WAF 规则文件（路径必须在规则目录内）。
+    #[serde(rename = "waf.conf_read")]
+    WafConfRead { path: String },
+    /// 保存一个 WAF 规则文件：写前备份，`nginx -t` 不过就回滚。
+    #[serde(rename = "waf.conf_save")]
+    WafConfSave { path: String, content: String },
+    /// WAF 审计日志查看。
+    /// - `unique_id` 为空：返回 `SecAuditLog` 指向文件的尾部 `lines` 行（原始文本，兼容旧行为）。
+    /// - `unique_id` 非空：从主日志抽取该事务的完整审计条目并结构化解析（命中规则明细）。
+    #[serde(rename = "waf.audit")]
+    WafAudit { lines: u32, unique_id: String },
+    /// 一键开启 WAF：组件（libmodsecurity + 模块 .so）已在盘上、只是没挂到 nginx 上时，
+    /// 补齐 `load_module` 与 conf.d 启用文件并重载。缺组件则拒绝（那属于安装）。
+    #[serde(rename = "waf.enable")]
+    WafEnable,
+    /// 切换 WAF 规则引擎形态：`On`（拦截）/ `DetectionOnly`（只记录不拦截）/ `Off`。
+    ///
+    /// 装完默认停在 `DetectionOnly`：先看审计日志确认没有正常业务被误判，再切 On。
+    /// mode 会被写进配置文件，只放行这三个取值。
+    #[serde(rename = "waf.set_engine")]
+    WafSetEngine { mode: String },
+    /// 服务总览：应用商店已安装应用中「登记了 systemd 服务」的实例卡片
+    /// （名称 / 版本 / 分类 / unit 名 / 运行状态 / 开机自启）。
+    ///
+    /// 只有这类应用能在「服务配置 → 总览」里被启停和管理自启动。
+    #[serde(rename = "services.overview")]
+    ServicesOverview,
+    /// 服务启停：action 取 start / stop / restart / reload。
+    ///
+    /// `svc` 必须是 [`Request::ServicesOverview`] 扫描出来的 unit 名，
+    /// 不允许对任意 systemd unit 下发动作。
+    #[serde(rename = "services.control")]
+    ServicesControl { svc: String, action: String },
+    /// 开机自启开关：enable=true → `systemctl enable`，否则 `disable`。
+    /// 白名单同 [`Request::ServicesControl`]。
+    #[serde(rename = "services.boot")]
+    ServicesBoot { svc: String, enable: bool },
+    /// 读取已加密保存的服务凭据（由 `zapctl cred gen <服务> <用户>` 生成）。
+    /// zapexec 以 root 读取 `/etc/zap/credentials/{service}_{user}.cred` 并用面板主密钥解密，
+    /// 用于创建数据库 / 初始化服务时取回密码。仅回传明文，不做任何写操作。
+    #[serde(rename = "cred.read")]
+    CredRead { service: String, user: String },
+    /// 面板用户的计划任务（crontab）：以指定 Linux 账号运行一条命令 / 脚本。
+    ///
+    /// - `linux_user`：实际执行身份（已由 zapd 校验；非 admin 恒为其自身账号）
+    /// - `home_dir`：非空且存在时作为工作目录
+    /// - `kind`：`script`（`command` 为脚本绝对路径）或 `command`（`command` 为 sh 命令体）
+    /// - `log_path`：输出追加写入的日志文件（须位于 `{ZAP_PATH}/data/users/` 之下）
+    ///
+    /// 后台执行：立即返回，结束后在日志末尾追加 `__ZAP_DONE__ <exit_code>`。
+    #[serde(rename = "cron.run")]
+    CronRun {
+        run_id: String,
+        linux_user: String,
+        home_dir: String,
+        command: String,
+        kind: String,
+        log_path: String,
+    },
+    /// 写入 ACME HTTP-01 验证文件（root 特权，供 Let's Encrypt 自动验证）。
+    ///
+    /// `{ZAP_PATH}/data/www/_zap/acme/.well-known/acme-challenge/{token}`；
+    /// token 仅允许 `[A-Za-z0-9_-]`（防路径穿越），文件 0644、目录 0755。
+    #[serde(rename = "acme.http_write")]
+    AcmeHttpWrite { entries: Vec<AcmeChallengeEntry> },
+    /// 清理 ACME HTTP-01 验证文件（幂等）。订单成功 / 失败 / 取消后都应收尾调用。
+    #[serde(rename = "acme.http_clear")]
+    AcmeHttpClear { tokens: Vec<String> },
+    // ── Docker 容器管理（面板「容器」）──────────────────────
+    /// 环境探测：docker 是否安装、守护进程是否可用、compose 插件是否存在。
+    #[serde(rename = "docker.status")]
+    DockerStatus,
+    /// 容器列表。`all = true` 时含已停止容器（`docker container ls -a`）。
+    #[serde(rename = "docker.containers")]
+    DockerContainers { all: bool },
+    /// 容器批量动作：start / stop / restart / pause / unpause / kill / remove。
+    #[serde(rename = "docker.container_action")]
+    DockerContainerAction { ids: Vec<String>, action: String },
+    /// 容器快启：等价 `docker run -d`（创建 + 启动一步到位），返回新容器 ID。
+    ///
+    /// 供镜像列表的「启动」按钮使用 —— 只透传白名单字段，参数走 Engine API 而不拼命令。
+    /// `name` 为空时由 daemon 自动起名；`ports` 支持 `[IP:]宿主机端口:容器端口[/udp]`。
+    #[serde(rename = "docker.container_run")]
+    DockerContainerRun {
+        image: String,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        ports: Vec<String>,
+        /// 重启策略：空 / no / always / unless-stopped / on-failure
+        #[serde(default)]
+        restart: String,
+    },
+    /// 容器详情：透传 `docker container inspect` 的原始 JSON 对象。
+    #[serde(rename = "docker.container_inspect")]
+    DockerContainerInspect { id: String },
+    /// 容器日志尾部（一次性拉取；前端按需轮询实现跟随）。
+    #[serde(rename = "docker.container_logs")]
+    DockerContainerLogs {
+        id: String,
+        tail: Option<u32>,
+        since: Option<String>,
+        timestamps: bool,
+    },
+    /// 实时资源快照（`docker stats --no-stream`）：CPU / 内存 / 网络 / 磁盘 IO。
+    #[serde(rename = "docker.stats")]
+    DockerStats,
+    /// 镜像列表（含悬空镜像）。
+    #[serde(rename = "docker.images")]
+    DockerImages,
+    /// 镜像动作：pull（id 为仓库引用）/ remove（id 为镜像 ID 或引用）/ prune。
+    #[serde(rename = "docker.image_action")]
+    DockerImageAction { id: String, action: String },
+    /// 镜像详情：`inspect` 原始 JSON + 构建历史（每层对应的构建指令）。
+    #[serde(rename = "docker.image_inspect")]
+    DockerImageInspect { id: String },
+    /// 用 Containerfile / Dockerfile 构建镜像。
+    ///
+    /// 构建是长任务，因此和其它运行记录一样「先登记、后后台执行」：stdout / stderr
+    /// 逐行追加写入 `log_path`，进程退出后追加 `__ZAP_DONE__ <code>`，
+    /// 前端用 `/appstore/ws/{run_id}` 看实时日志。
+    #[serde(rename = "docker.image_build")]
+    DockerImageBuild {
+        run_id: String,
+        log_path: String,
+        /// 构建上下文目录（绝对路径）
+        context_dir: String,
+        /// Containerfile 绝对路径，必须位于上下文目录之内
+        containerfile: String,
+        /// 目标镜像名（含 tag），可多个
+        tags: Vec<String>,
+        #[serde(default)]
+        build_args: Vec<DockerBuildArg>,
+        /// 目标平台（如 linux/amd64）；空 = 跟随宿主架构
+        #[serde(default)]
+        platform: String,
+        #[serde(default)]
+        no_cache: bool,
+        #[serde(default)]
+        pull: bool,
+    },
+    /// 数据卷列表。
+    #[serde(rename = "docker.volumes")]
+    DockerVolumes,
+    /// 数据卷动作：create / remove / prune。
+    ///
+    /// `owner_home` / `owner_user` 非空时，create 建的是 bind mount 卷：
+    /// 数据落在 `{owner_home}/volumes/{name}`，并归 `owner_user` 这个 Linux 账号所有 ——
+    /// 多用户环境下卷数据要进用户自己的配额、也能跟着 home 一起备份，
+    ///  `/var/lib/docker/volumes` only for root
+    /// 两者为空（旧客户端）或 remove / prune 时，退回 daemon 默认位置。
+    #[serde(rename = "docker.volume_action")]
+    DockerVolumeAction {
+        name: String,
+        action: String,
+        #[serde(default)]
+        owner_home: String,
+        #[serde(default)]
+        owner_user: String,
+    },
+    /// 网络列表。
+    #[serde(rename = "docker.networks")]
+    DockerNetworks,
+    /// 网络动作：create（可指定 driver）/ remove / prune。
+    #[serde(rename = "docker.network_action")]
+    DockerNetworkAction {
+        name: String,
+        action: String,
+        driver: Option<String>,
+    },
+    /// Compose 项目列表（`docker compose ls -a`）。
+    #[serde(rename = "docker.compose_list")]
+    DockerComposeList,
+    /// Compose 动作：up / down / start / stop / restart / pull / build / update / rebuild。
+    ///
+    /// 项目配置文件从 `compose ls` 结果中反查（受管项目再兜底到 stacks 目录），
+    /// 避免前端直接传任意路径。
+    #[serde(rename = "docker.compose_action")]
+    DockerComposeAction { project: String, action: String },
+    /// 读取 Compose 项目的配置文件内容（面板的 yaml 预览 / 编辑）。
+    ///
+    /// 路径由后端自行定位（面板登记的位置 → `compose ls` 反查 → 约定目录扫描），
+    /// 不接受前端传路径：否则就是一个「读任意文件」的口子。
+    #[serde(rename = "docker.compose_file")]
+    DockerComposeFile { project: String },
+    /// 新建 / 覆盖 Compose 项目的 compose.yaml（面板「+ Compose」与「导入」）。
+    ///
+    /// 存放位置由 `location` 决定（路径不让前端传，只能选区域）：
+    /// - `global`（默认）：`/opt/docker/<project>` —— 系统公共区域，所有管理员都能管；
+    /// - `user`：`<home>/<project>` —— `home` 是当前用户的家目录，文件归该用户所有。
+    ///
+    /// 面板数据目录 `{ZAP_PATH}/data/stacks` 不再接受新建：早期落在那里的项目
+    /// 照旧可以编辑、删除（`compose_list` 仍会扫到，标为 `panel`）。
+    ///
+    /// `path` 是区域根之下的子路径（可选，默认就是项目名）：想让项目文件待在别处
+    /// （`/home/admin/docker/podhello`）就填 `docker/podhello`；只接受相对路径、
+    /// 最多 3 层、不含 `.` / `..`，因此拼出来仍在区域根内部。
+    ///
+    /// 项目已存在（面板认得它的配置文件）时**就地覆盖**，不会被 location 搬家。
+    /// `project` 只允许 docker 的项目名字符集，写盘前自行挡路径穿越。
+    #[serde(rename = "docker.compose_save")]
+    DockerComposeSave {
+        project: String,
+        content: String,
+        #[serde(default)]
+        location: Option<String>,
+        #[serde(default)]
+        home: Option<String>,
+        #[serde(default)]
+        owner: Option<String>,
+        #[serde(default)]
+        path: Option<String>,
+    },
+    /// 删除项目：先 `down` 再清理受管目录；`compose ls` 里的外部项目只 down、
+    /// 不动它的文件（那些文件不归面板管）。
+    #[serde(rename = "docker.compose_remove")]
+    DockerComposeRemove { project: String },
+    /// 项目日志尾部（`docker compose logs --tail N`），一次性拉取。
+    #[serde(rename = "docker.compose_logs")]
+    DockerComposeLogs { project: String, tail: u32 },
+    /// 容器内交互式终端（`docker exec -it` 的等价物）。
+    ///
+    /// 这是**长会话**：stdin 需要持续输入、stdout 需要增量回传，
+    /// 因此不走普通 `Request` 的一问一答，而是由 `Message::StreamOpen` 承载。
+    /// `cmd` 为空时退回 `sh`。
+    #[serde(rename = "docker.container_exec")]
+    DockerContainerExec {
+        id: String,
+        cmd: Vec<String>,
+        /// 容器内执行用户（`user[:group]`），为空用镜像默认用户
+        user: Option<String>,
+        cols: u16,
+        rows: u16,
+    },
+    /// 守护进程实时事件流（`docker events` 的等价物）。
+    ///
+    /// 同样是长会话：连接期间持续推送事件，断开即结束，因此也走 `Message::StreamOpen`。
+    #[serde(rename = "docker.events")]
+    DockerEvents,
+    /// 列出可用插件（统一在系统级 $ZAP_PATH/plugins），按 placement 槽位与 scope 过滤
+    #[serde(rename = "plugin.list")]
+    PluginList {
+        actor: String,
+        home: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        slot: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
+        /// 面板界面语言（`zh-CN` / `en-US`）：manifest 可以按语言提供文案
+        /// （标题 / 按钮 / 选项说明），这里挑击中语言的那一套回落。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lang: Option<String>,
+    },
+    /// 运行插件：scope=site 以站点 Linux 账号执行，scope=user 以调用方面板用户账号执行，
+    /// scope=system 以 root 执行。
+    #[serde(rename = "plugin.run")]
+    PluginRun {
+        name: String,
+        actor: String,
+        home: String,
+        /// 调用方面板用户对应的 Linux 账号（scope=user 时降权到此账号运行）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        user: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        site_id: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        site_root: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        site_linux_user: Option<String>,
+        action: String,
+        #[serde(default)]
+        options: std::collections::HashMap<String, String>,
+        /// 调用方角色（逗号分隔，来自面板账号的 `roles`）。
+        ///
+        /// 用来在后端挡掉 manifest 标了 `dangerous: true` 的动作：
+        /// demo（只读演示）账号一律不允许执行写类 / 破坏性动作。缺省为 None 时
+        /// 不做这层判断（自检进程等没有面板角色的调用方）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        roles: Option<String>,
+    },
+    /// 安装插件。
+    ///
+    /// `level`：统一 `system`（`$ZAP_PATH/plugins/<name>`，管理员级；普通用户只能使用已安装插件）。
+    /// `source` 决定来源：目前仅 `archive`（已落在磁盘上的 zip / tar.gz 包路径，由面板上传而来）。
+    #[serde(rename = "plugin.install")]
+    PluginInstall {
+        name: String,
+        actor: String,
+        home: String,
+        /// 来源类型：`archive`
+        source: String,
+        /// archive 时为包路径
+        src: String,
+        /// 已存在同名插件时是否覆盖
+        #[serde(default)]
+        force: bool,
+    },
+    /// 卸载插件：删除 `<base>/<name>` 整个目录。
+    #[serde(rename = "plugin.uninstall")]
+    PluginUninstall {
+        name: String,
+        actor: String,
+        home: String,
+    },
+    /// 读取插件自带的 HTML 界面（`manifest.yaml` 里 `ui.html` 指向的文件）。
+    ///
+    /// 只回传文件内容，由前端塞进沙箱 iframe 渲染；不在 zapd 侧拼页面，
+    /// 避免把插件 HTML 混进面板的同源文档里。
+    #[serde(rename = "plugin.ui")]
+    PluginUi {
+        name: String,
+        actor: String,
+        home: String,
+        /// 面板界面语言：注入进 iframe（`zap.ui.lang` / `zap.ui.t`），
+        /// 让插件自己的文案也能跟着面板语言走。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lang: Option<String>,
+    },
+    /// 读取插件级持久化配置（KV，按「插件 + 面板用户」维度）。
+    ///
+    /// 插件自己的目录是 root 所有，装面板的 Lua 没有地方写偏好 / 凭证，
+    /// 这套 KV 由 zapexec 统一代管。
+    #[serde(rename = "plugin.config.get")]
+    PluginConfigGet {
+        name: String,
+        actor: String,
+        home: String,
+    },
+    /// 写入插件级配置：整表合并（传进来的键覆盖旧值，未传的键保留）。
+    #[serde(rename = "plugin.config.set")]
+    PluginConfigSet {
+        name: String,
+        actor: String,
+        home: String,
+        config: std::collections::HashMap<String, String>,
+    },
+    /// 跑插件自带的冒烟测试（`<plugin>/tests.yaml`）：逐个 action 跑一遍并断言结果。
+    ///
+    /// 插件作者用它自查；CI / 打包前也可以跑这一条，避免「装上了才知道是坏的」。
+    #[serde(rename = "plugin.test")]
+    PluginTest {
+        name: String,
+        actor: String,
+        home: String,
+    },
+    /// 备份：列出备份目录下的归档（root 特权）。
+    #[serde(rename = "backup.list")]
+    BackupList {
+        /// 实际要扫描的目录（可由 zapd 解析为绝对路径）
+        dir: String,
+        /// 备份根目录（用于校验落点）；空 = zapexec 兜底默认 `{ZAP_PATH}/data/backup`
+        #[serde(default)]
+        backup_root: String,
+    },
+    /// 备份：将目录/文件打包为 tar.gz（root 特权）。
+    #[serde(rename = "backup.dir")]
+    BackupDir {
+        /// 归档名（不含路径与后缀，自动加 .tar.gz）
+        name: String,
+        /// 待打包的绝对路径列表（多个时按各自相对 `/` 的层级存入归档）
+        paths: Vec<String>,
+        /// 输出目录（空 = 备份根；否则落在备份根内）
+        #[serde(default)]
+        dest_dir: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        as_user: Option<String>,
+        #[serde(default)]
+        skip_owner_check: bool,
+        /// 备份根目录；空 = 默认
+        #[serde(default)]
+        backup_root: String,
+        /// 排除模式（相对/通配，作用于归档内的相对路径，如 `node_modules`、`.cache`、
+        /// `*/backups`）；与 `exclude_file` 合并后逐条作为 tar 的 `--exclude`。
+        #[serde(default)]
+        exclude: Vec<String>,
+        /// 额外排除文件绝对路径（由 zapexec 以 root 读取并合并，用于读不到家目录的 zapd
+        /// 把用户自定义排除清单交给 root 进程处理）；空 = 不读取。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exclude_file: Option<String>,
+    },
+    /// 备份：导出数据库（root 特权）。mysql 走 mysqldump，sqlite 走 sqlite3 .dump。
+    #[serde(rename = "backup.db")]
+    BackupDb {
+        /// 归档名（不含路径与后缀，自动加 .sql.gz）
+        name: String,
+        /// mysql | sqlite
+        engine: String,
+        db_name: String,
+        #[serde(default)]
+        user: String,
+        #[serde(default)]
+        password: String,
+        #[serde(default)]
+        host: String,
+        #[serde(default)]
+        port: i32,
+        /// 本机 socket 路径（优先于 host/port；空则走 TCP 回环）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        socket: Option<String>,
+        /// 输出目录（空 = 备份根；否则落在备份根内）
+        #[serde(default)]
+        dest_dir: String,
+        /// sqlite 时为数据库文件路径（engine=sqlite 时必填）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        db_path: Option<String>,
+        /// 备份根目录；空 = 默认
+        #[serde(default)]
+        backup_root: String,
+    },
+    /// 备份：删除归档（root 特权，路径须位于备份根内）。
+    #[serde(rename = "backup.delete")]
+    BackupDelete {
+        path: String,
+        /// 备份根目录；空 = 默认
+        #[serde(default)]
+        backup_root: String,
+    },
+    /// 备份：还原目录（解包到目标目录，root 特权）。
+    #[serde(rename = "backup.restore_dir")]
+    BackupRestoreDir {
+        /// 归档绝对路径
+        path: String,
+        /// 解包目标目录（归档内相对结构会原样落到此目录下）
+        target_dir: String,
+        /// 为 true 时按归档内相对路径写回原绝对位置（tar -C / 解包），忽略 target_dir。
+        /// 因会写回文件系统任意位置，须由管理员或该备份所属用户发起。
+        #[serde(default)]
+        to_original: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        as_user: Option<String>,
+        #[serde(default)]
+        skip_owner_check: bool,
+        /// 备份根目录；空 = 默认
+        #[serde(default)]
+        backup_root: String,
+    },
+    /// 备份：还原数据库（root 特权）。
+    #[serde(rename = "backup.restore_db")]
+    BackupRestoreDb {
+        /// 归档绝对路径（.sql.gz）
+        path: String,
+        engine: String,
+        db_name: String,
+        #[serde(default)]
+        user: String,
+        #[serde(default)]
+        password: String,
+        #[serde(default)]
+        host: String,
+        #[serde(default)]
+        port: i32,
+        /// sqlite 时为目标数据库文件路径
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        db_path: Option<String>,
+        /// 备份根目录；空 = 默认
+        #[serde(default)]
+        backup_root: String,
+    },
+    /// 备份：查询某目录所在文件系统的可用 / 总空间（root 特权，用于磁盘不足预警）。
+    #[serde(rename = "backup.disk")]
+    BackupDisk {
+        /// 要查询的目录（须位于备份根内；空 = 备份根）
+        #[serde(default)]
+        dir: String,
+    },
+}
+
+/// `zapexec` -> `zapd` 的响应。
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Response {
+    /// 0 = 成功，非 0 = 错误（沿用 `ZapError` 的 code 约定）
+    pub code: i64,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
+}
+
+impl Response {
+    pub fn ok(message: impl Into<String>, data: Option<serde_json::Value>) -> Self {
+        Self {
+            code: 0,
+            message: message.into(),
+            data,
+        }
+    }
+
+    pub fn err(code: i64, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            data: None,
+        }
+    }
+}
+
+/// 握手与数据阶段共用的消息封装。
+///
+/// `Request` / `Response` 载荷较大（含站点同步等大字段），装箱存放：
+/// 避免 `Message` 的栈上尺寸被最大变体撑大（各变体尺寸差异 10 倍以上）。
+/// serde 序列化对 `Box<T>` 透明，线上 JSON 格式与未装箱时完全一致。
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Message {
+    /// server -> client：随机挑战（hex）
+    Challenge { challenge: String },
+    /// client -> server：HMAC-SHA256(secret, challenge) 的 hex
+    Auth { mac: String },
+    /// server -> client：握手成功
+    Welcome,
+    /// client -> server：请求
+    Request(Box<Request>),
+    /// server -> client：响应
+    Response(Box<Response>),
+    // ── 流式会话（容器 exec 终端）─────────────────────────
+    //
+    // 一问一答的 `Request` / `Response` 承载不了交互式终端：stdin 要持续输入、
+    // stdout 要增量回传。这里复用**同一条已认证的 Unix 连接**跑会话，
+    // 由 `id` 区分（理论上可并发多路，目前 exec 一路一连接）。
+    /// client -> server：开启会话
+    StreamOpen { id: String, req: Box<Request> },
+    /// client -> server：会话输入（**base64** 编码的字节，JSON 无法直接承载二进制）
+    StreamIn { id: String, data: String },
+    /// client -> server：TTY 窗口尺寸变更
+    StreamResize { id: String, cols: u16, rows: u16 },
+    /// client -> server：关闭会话（关闭 stdin，等待命令退出）
+    StreamClose { id: String },
+    /// server -> client：会话就绪（可以开始收发数据）
+    StreamReady { id: String },
+    /// server -> client：会话输出（base64）
+    StreamOut { id: String, data: String },
+    /// server -> client：会话正常结束；`code` 为容器内命令退出码
+    StreamEnd { id: String, code: i32 },
+    /// server -> client：会话异常结束（容器不存在 / 未运行 / 无该 shell …）
+    StreamError { id: String, message: String },
+}
+
+/// 站点/目录名安全规范化（zapd 与 zapexec 共用）：
+/// 仅保留 ASCII 字母数字与 `_`/`-`，其余（含 `.`、空格、路径分隔符等）替换为 `-`，
+/// 再去除首尾 `-`；空结果回退 `site`，最长 48 字符。
+/// 与 zapexec `verbs/site.rs` 的历史实现保持一致，避免「面板侧记录的目录名」与
+/// 「执行端实际创建的目录名」分叉。
+pub fn sanitize_site_name(name: &str) -> String {
+    let mut out: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '_' | '-') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    out = out.trim_matches('-').to_string();
+    if out.is_empty() {
+        out = "site".to_string();
+    }
+    if out.chars().count() > 48 {
+        out = out.chars().take(48).collect();
+    }
+    out
+}
+
+/// 面板用户名 → Linux 系统账号名派生（与家目录末段一致，home_dir 统一
+/// `/home/{linux_username}`）：
+/// 1. 经 `sanitize_site_name` 清洗；2. 转小写；
+/// 3. 首位必须是 ascii 字母或 `_`（数字/`-` 开头补 `z` 前缀，保证 useradd 合法）；
+/// 4. 最长 24 字符（Linux 用户名上限 32，留裕量给面板其它后缀）。
+pub fn linux_username(username: &str) -> String {
+    let clean = sanitize_site_name(username);
+    let mut base: String = clean
+        .chars()
+        .take(23)
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    let first_ok = base
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+    if !first_ok {
+        // base 以数字或 `-` 开头（sanitize 已去首尾 `-`，这里多为数字开头/空）
+        if base.is_empty() {
+            base = "zapuser".to_string();
+        } else {
+            base.insert(0, 'z');
+        }
+    }
+    if base.len() > 24 {
+        base.truncate(24);
+    }
+    base
+}
+
+/// docker 镜像引用白名单：`[命名空间/]名称[:tag]`（zapd 与 zapexec 共用）。
+///
+/// 只允许小写字母数字与 `. _ - /`（docker 本身也拒绝大写仓库名，提前拦一次能给出
+/// 中文提示而不是 daemon 的英文长串），tag 部分额外允许大写。
+pub fn valid_image_ref(s: &str) -> bool {
+    if s.is_empty() || s.len() > 200 {
+        return false;
+    }
+    let (name, tag) = match s.split_once(':') {
+        Some((n, t)) => (n, Some(t)),
+        None => (s, None),
+    };
+    if let Some(t) = tag
+        && (t.is_empty()
+            || t.len() > 128
+            || !t
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-')))
+    {
+        return false;
+    }
+    if name.is_empty() || name.starts_with('/') || name.ends_with('/') || name.contains("//") {
+        return false;
+    }
+    name.split('/').all(|seg| {
+        !seg.is_empty()
+            && !seg.starts_with('.')
+            && seg.chars().all(|c| {
+                c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-')
+            })
+    })
+}
+
+/// 补全默认 tag：`nginx` → `nginx:latest`（docker 的默认行为，显式化便于展示 / 去重）。
+pub fn normalize_image_tag(tag: &str) -> String {
+    let tag = tag.trim();
+    let last = tag.rsplit('/').next().unwrap_or(tag);
+    if last.contains(':') {
+        tag.to_string()
+    } else {
+        format!("{tag}:latest")
+    }
+}
+
+/// 面板用户名 → docker 命名空间前缀（多用户隔离用）。
+///
+/// 直接复用 [`linux_username`] 的派生规则：它已经保证「小写 + 仅 `[a-z0-9_-]`」，
+/// 且不含 `.`（首段带点会被 docker 当成 registry 主机名）。这样
+/// 「面板账号 / 家目录 / 系统账号 / 镜像命名空间」四者是同一个名字，用户好记。
+pub fn docker_namespace(username: &str) -> String {
+    linux_username(username)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_uses_whitelist_verbs() {
+        assert_eq!(
+            serde_json::to_string(&Request::TimeSync).unwrap(),
+            r#"{"verb":"time.sync"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Request::SshKeyInstallPub {
+                username: "admin".into(),
+                public_key: "ssh-ed25519 AAAA".into(),
+            })
+            .unwrap(),
+            r#"{"verb":"ssh_key.install_pub","username":"admin","public_key":"ssh-ed25519 AAAA"}"#
+        );
+    }
+
+    #[test]
+    fn request_round_trip() {
+        let req = Request::FileWrite {
+            path: "/tmp/a.txt".into(),
+            content: "hello".into(),
+            as_user: None,
+            skip_owner_check: false,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: Request = serde_json::from_str(&json).unwrap();
+        assert_eq!(format!("{req:?}"), format!("{back:?}"));
+    }
+
+    #[test]
+    fn appstore_verbs_tagging() {
+        assert_eq!(
+            serde_json::to_string(&Request::AppstoreInstalled).unwrap(),
+            r#"{"verb":"appstore.installed"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Request::AppstoreInstall {
+                pkg_path: "database/mariadb".into(),
+                source: "official".into(),
+                repo_id: Some("appstore".into()),
+                version: "11.4.4".into(),
+                action: None,
+                options: None,
+                instance: None,
+                provision: None,
+                user: None,
+                run_mode: None,
+                run_id: "r1".into(),
+            })
+            .unwrap(),
+            r#"{"verb":"appstore.install","pkg_path":"database/mariadb","source":"official","repo_id":"appstore","version":"11.4.4","run_id":"r1"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Request::AppstoreInstall {
+                pkg_path: "application/php".into(),
+                source: "official".into(),
+                repo_id: Some("appstore".into()),
+                version: "8.3.3".into(),
+                action: Some("build".into()),
+                options: None,
+                instance: None,
+                provision: Some(
+                    [("DB_NAME".to_string(), "u_wp1".to_string())]
+                        .into_iter()
+                        .collect()
+                ),
+                user: None,
+                run_mode: None,
+                run_id: "r2".into(),
+            })
+            .unwrap(),
+            r#"{"verb":"appstore.install","pkg_path":"application/php","source":"official","repo_id":"appstore","version":"8.3.3","action":"build","provision":{"DB_NAME":"u_wp1"},"run_id":"r2"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Request::AppstoreRepoAdd {
+                name: "My Store".into(),
+                url: "https://github.com/user/store.git".into(),
+                run_id: "r9".into(),
+            })
+            .unwrap(),
+            r#"{"verb":"appstore.repo_add","name":"My Store","url":"https://github.com/user/store.git","run_id":"r9"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Request::AppstoreRepoRemove {
+                id: "my-store".into(),
+            })
+            .unwrap(),
+            r#"{"verb":"appstore.repo_remove","id":"my-store"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Request::AppstoreRepoUpdate {
+                id: "appstore".into(),
+                run_id: "r9".into(),
+            })
+            .unwrap(),
+            r#"{"verb":"appstore.repo_update","id":"appstore","run_id":"r9"}"#
+        );
+    }
+
+    #[test]
+    fn appstore_instance_action_tagging() {
+        assert_eq!(
+            serde_json::to_string(&Request::AppstoreInstanceAction {
+                pkg_path: "application/php".into(),
+                instance: None,
+                action: "stop".into(),
+            })
+            .unwrap(),
+            r#"{"verb":"appstore.instance_action","pkg_path":"application/php","action":"stop"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Request::SiteVhostSync {
+                site_id: 1,
+                name: "blog".into(),
+                domains: vec!["a.com".into(), "b.com".into()],
+                enabled: true,
+                mode: None,
+                php_socket: Some("unix:/var/run/php-fpm-8.3.sock".into()),
+                index_files: None,
+                web_root: None,
+                log_root: None,
+                owner_user: None,
+                site_type: "php".into(),
+                web_root_custom: false,
+                upstreams: vec![],
+                locations: vec![],
+                ssl_fullchain: None,
+                ssl_key: None,
+                force_https: false,
+                ssl_protocols: String::new(),
+                ssl_ciphers: String::new(),
+                ssl_prefer_server_ciphers: false,
+                ssl_http2: false,
+                listen_ipv4: String::new(),
+                listen_ipv6: String::new(),
+                site_ips: vec![],
+                security: None,
+            })
+            .unwrap(),
+            r#"{"verb":"site.vhost_sync","site_id":1,"name":"blog","domains":["a.com","b.com"],"enabled":true,"php_socket":"unix:/var/run/php-fpm-8.3.sock","site_type":"php","web_root_custom":false,"force_https":false}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Request::SiteVhostRemove {
+                site_id: 2,
+                name: "x".into(),
+            })
+            .unwrap(),
+            r#"{"verb":"site.vhost_remove","site_id":2,"name":"x"}"#
+        );
+    }
+
+    #[test]
+    fn env_verb_tagging() {
+        assert_eq!(
+            serde_json::to_string(&Request::EnvDetect).unwrap(),
+            r#"{"verb":"env.detect"}"#
+        );
+        // env.detect 需能经 serde 反序列化回来（白名单内部路由用）
+        let back: Request = serde_json::from_str(r#"{"verb":"env.detect"}"#).unwrap();
+        assert!(matches!(back, Request::EnvDetect));
+    }
+
+    #[test]
+    fn site_vhost_sync_with_dirs() {
+        let req = Request::SiteVhostSync {
+            site_id: 1,
+            name: "blog".into(),
+            domains: vec!["a.com".into()],
+            enabled: true,
+            mode: None,
+            php_socket: None,
+            index_files: None,
+            web_root: Some("/home/zap/www/blog-1".into()),
+            log_root: Some("/home/zap/logs/1-blog".into()),
+            owner_user: Some("zap".into()),
+            site_type: "php".into(),
+            web_root_custom: false,
+            upstreams: vec![],
+            locations: vec![],
+            ssl_fullchain: None,
+            ssl_key: None,
+            force_https: false,
+            ssl_protocols: String::new(),
+            ssl_ciphers: String::new(),
+            ssl_prefer_server_ciphers: false,
+            ssl_http2: false,
+            listen_ipv4: String::new(),
+            listen_ipv6: String::new(),
+            site_ips: vec![],
+            security: None,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(
+            json,
+            r#"{"verb":"site.vhost_sync","site_id":1,"name":"blog","domains":["a.com"],"enabled":true,"web_root":"/home/zap/www/blog-1","log_root":"/home/zap/logs/1-blog","owner_user":"zap","site_type":"php","web_root_custom":false,"force_https":false}"#
+        );
+        // 老版本 JSON（无 web_root/log_root）也能反序列化成功 → None
+        let old: Request =
+            serde_json::from_str(r#"{"verb":"site.vhost_sync","site_id":1,"name":"blog","domains":["a.com"],"enabled":true,"php_socket":"unix:/var/run/php-fpm-8.3.sock"}"#)
+                .unwrap();
+        match old {
+            Request::SiteVhostSync {
+                web_root, log_root, ..
+            } => {
+                assert!(web_root.is_none());
+                assert!(log_root.is_none());
+            }
+            _ => panic!("应解析为 SiteVhostSync"),
+        }
+    }
+
+    #[test]
+    fn user_home_init_tagging() {
+        assert_eq!(
+            serde_json::to_string(&Request::UserHomeInit {
+                home_dir: "/home/zap".into(),
+                owner: "zap".into(),
+            })
+            .unwrap(),
+            r#"{"verb":"user.home_init","home_dir":"/home/zap","owner":"zap"}"#
+        );
+        let back: Request = serde_json::from_str(
+            r#"{"verb":"user.home_init","home_dir":"/home/zap","owner":"zap"}"#,
+        )
+        .unwrap();
+        assert!(
+            matches!(back, Request::UserHomeInit { home_dir, owner } if home_dir == "/home/zap" && owner == "zap")
+        );
+    }
+
+    #[test]
+    fn sanitize_site_name_helper() {
+        assert_eq!(sanitize_site_name("我的 博客"), "site");
+        assert_eq!(sanitize_site_name("my blog/x"), "my-blog-x");
+        assert_eq!(sanitize_site_name(".."), "site");
+        assert_eq!(sanitize_site_name("ABC_123"), "ABC_123");
+        // 最长 48
+        let long = "a".repeat(60);
+        assert_eq!(sanitize_site_name(&long).chars().count(), 48);
+    }
+
+    #[test]
+    fn linux_username_helper() {
+        assert_eq!(linux_username("zap"), "zap");
+        assert_eq!(linux_username("Zap_Admin"), "zap_admin");
+        // 全非法 → sanitize 回退 site → 小写 site
+        assert_eq!(linux_username("我的 博客"), "site");
+        assert_eq!(linux_username("123abc"), "z123abc");
+        // 前导 - 被 sanitize 修剪
+        assert_eq!(linux_username("-x"), "x");
+        let long = "A".repeat(40);
+        let got = linux_username(&long);
+        assert!(got.len() <= 24);
+        assert!(got.chars().next().unwrap().is_ascii_alphabetic());
+    }
+
+    #[test]
+    fn upgrade_verbs_tagging() {
+        assert_eq!(
+            serde_json::to_string(&Request::UpgradeInfo).unwrap(),
+            r#"{"verb":"upgrade.info"}"#
+        );
+        let json = serde_json::to_string(&Request::UpgradeRun {
+            run_id: "r1".into(),
+            stage_dir: "/usr/local/zap/data/upgrade/stage/r1".into(),
+            log_path: "/usr/local/zap/data/upgrade/logs/run-r1.log".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            r#"{"verb":"upgrade.run","run_id":"r1","stage_dir":"/usr/local/zap/data/upgrade/stage/r1","log_path":"/usr/local/zap/data/upgrade/logs/run-r1.log"}"#
+        );
+        // 白名单之外必须被拒绝（回归）
+        let err = serde_json::from_str::<Request>(r#"{"verb":"shell.exec","cmd":"id"}"#);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn php_pool_sync_tagging() {
+        let req = Request::PhpPoolSync {
+            php_instance: "php8.3".into(),
+            linux_user: "zap".into(),
+            home_dir: "/home/zap".into(),
+            spec: "{\"pm\":\"dynamic\",\"max_children\":8}".into(),
+        };
+        let back: Request = serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
+        assert_eq!(format!("{req:?}"), format!("{back:?}"));
+    }
+
+    #[test]
+    fn appstore_verbs_round_trip() {
+        let req = Request::AppstoreScriptWrite {
+            path: "scripts/admin/backup.sh".into(),
+            content: "#!/bin/bash\necho hi".into(),
+            username: "admin".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: Request = serde_json::from_str(&json).unwrap();
+        assert_eq!(format!("{req:?}"), format!("{back:?}"));
+    }
+
+    #[test]
+    fn unknown_verb_rejected() {
+        // 白名单之外（例如任意 shell 执行）必须被拒绝
+        let err = serde_json::from_str::<Request>(r#"{"verb":"shell.exec","cmd":"id"}"#);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn missing_field_rejected() {
+        let err = serde_json::from_str::<Request>(r#"{"verb":"file.read"}"#);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn response_helpers() {
+        let ok = Response::ok("done", Some(serde_json::json!({ "a": 1 })));
+        assert_eq!(ok.code, 0);
+        assert_eq!(ok.message, "done");
+        assert!(ok.data.is_some());
+
+        let err = Response::err(7, "boom");
+        assert_eq!(err.code, 7);
+        assert_eq!(err.message, "boom");
+        assert!(err.data.is_none());
+    }
+
+    #[test]
+    fn response_omits_none_data() {
+        let err = Response::err(1, "x");
+        let json = serde_json::to_string(&err).unwrap();
+        assert!(
+            !json.contains("data"),
+            "data=None 时不应序列化该字段: {json}"
+        );
+    }
+
+    #[test]
+    fn message_round_trip_all_variants() {
+        let msgs = vec![
+            Message::Challenge {
+                challenge: "abc".into(),
+            },
+            Message::Auth { mac: "def".into() },
+            Message::Welcome,
+            Message::Request(Box::new(Request::TimeSetTimezone {
+                timezone: "Asia/Shanghai".into(),
+            })),
+            Message::Response(Box::new(Response::ok("ok", None))),
+        ];
+        for m in msgs {
+            let json = serde_json::to_string(&m).unwrap();
+            let back: Message = serde_json::from_str(&json).unwrap();
+            assert_eq!(format!("{m:?}"), format!("{back:?}"), "json: {json}");
+        }
+    }
+
+    #[test]
+    fn message_type_tagging() {
+        assert_eq!(
+            serde_json::to_string(&Message::Welcome).unwrap(),
+            r#"{"type":"welcome"}"#
+        );
+        let m: Message = serde_json::from_str(r#"{"type":"challenge","challenge":"x"}"#).unwrap();
+        assert!(matches!(m, Message::Challenge { challenge } if challenge == "x"));
+    }
+}

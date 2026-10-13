@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <link rel="icon" href="/favicon.ico">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zap - OpenSource Control Panel</title>
+    <meta name="description" content="Zap is a powerful and flexible web control panel for Linux servers.">
+    <meta name="keywords" content="Zap,Admin,Panel,Linux OpenSource Control Panel,Web Control Panel,Web Hosting Control Panel,Server Management,Server Control Panel,Server Admin Panel,Server Management Tool,Server Management Software,Server Management System,Server Management Platform,Server Management Dashboard,Server Management Interface,Server Management Console">
+    <meta name="author" content="Zap Team">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <script>
+      // 主题预设：先于样式生效，避免深色模式下的白屏闪一下（FOUC）
+      (function () {
+        try {
+          var mode = localStorage.getItem('zap-theme-mode') || 'auto'
+          var dark =
+            mode === 'dark' ||
+            (mode === 'auto' &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches)
+          var el = document.documentElement
+          el.classList.toggle('dark', dark)
+          el.style.setProperty('color-scheme', dark ? 'dark' : 'light')
+        } catch (e) {}
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,471 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//! 通用服务配置端点（「服务配置」大类：php / mysql(MySQL/MariaDB 合一) / docker …）。
+//!
+//! 端点（均需管理员，均透传 zapexec 返回）：
+//! - GET  /system/service-conf/status           状态探测（Query: service）
+//! - GET  /system/service-conf/list             列出可编辑配置（Query: service）
+//! - GET  /system/service-conf/read             读取配置内容（Query: service, path）
+//! - POST /system/service-conf/save             保存配置（body: service, path, content）
+//! - GET  /system/service-conf/keys             关键项表单（Query: service）
+//! - POST /system/service-conf/keys/save        保存关键项（body: service, keys）
+//! - POST /system/service-conf/control          服务控制（body: service, action）
+
+use std::collections::BTreeMap;
+use std::net::SocketAddr;
+
+use axum::Json;
+use axum::extract::{Extension, Query};
+use serde::Deserialize;
+use serde_json::json;
+
+use crate::zap::ZapError;
+use crate::zap::ZapJsonResult;
+use crate::zap::audit;
+use crate::zap::jwt::ValidatedClaims;
+use crate::zap::jwt::is_admin;
+use zap_proto::Request;
+
+fn require_admin(claims: &ValidatedClaims) -> Result<(), ZapError> {
+    if is_admin(claims) {
+        Ok(())
+    } else {
+        Err(ZapError::Key(
+            -1,
+            "api.common.forbidden".to_string(),
+            "仅管理员可访问".to_string(),
+        ))
+    }
+}
+
+/// 执行一次 zapexec 请求，透传其 code/message/data。
+async fn exec(req: Request) -> Result<Json<serde_json::Value>, ZapError> {
+    let resp = crate::zapexec::call(req).await?;
+    if resp.code != 0 {
+        return Err(ZapError::New(resp.code, resp.message));
+    }
+    Ok(Json(
+        json!({ "code": 0, "message": "ok", "data": resp.data }),
+    ))
+}
+
+/// yaml 注册的服务 key 缓存：新增一份服务定义后重启 zapd 生效。
+///
+/// 服务定义在 zapexec 侧（内置 yaml + /etc/zap/services 覆盖），zapd 只能通过
+/// 一次 exec 拿到清单；这里进程内缓存一次，避免每次读写配置都多打一次 exec。
+static SERVICE_KEYS: tokio::sync::OnceCell<Vec<String>> = tokio::sync::OnceCell::const_new();
+
+/// 取 exec 侧注册的服务 key 列表（失败时回退内置三项，不至于整页不可用）。
+async fn registered_services() -> &'static Vec<String> {
+    SERVICE_KEYS
+        .get_or_init(|| async {
+            match crate::zapexec::call(Request::ServiceConfDefs).await {
+                Ok(resp) if resp.code == 0 => resp
+                    .data
+                    .as_ref()
+                    .and_then(|d| d.get("items"))
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|it| it.get("key").and_then(|k| k.as_str()))
+                            .map(|k| k.to_string())
+                            .collect()
+                    })
+                    .unwrap_or_else(fallback_keys),
+                _ => fallback_keys(),
+            }
+        })
+        .await
+}
+
+fn fallback_keys() -> Vec<String> {
+    vec!["php".to_string(), "mysql".to_string(), "docker".to_string()]
+}
+
+/// 校验服务名：必须在 exec 侧 yaml 注册的服务里（PHP 版本实例额外放行）。
+///
+/// 服务清单来自 yaml 注册，这里是异步的（第一次调用拉一次 exec 并缓存）。
+async fn validate_service(service: &str) -> Result<String, ZapError> {
+    // 服务名会拼进 shell 命令与文件路径，字符先收紧
+    let well_formed = !service.is_empty()
+        && service.len() <= 32
+        && service
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
+    // PHP 多版本实例 svc：php74 / php81 …（zapexec 按实例定位配置/unit）
+    let php_inst = is_php_instance_svc(service);
+    let known = registered_services().await.iter().any(|k| k == service);
+    if well_formed && (known || php_inst) {
+        Ok(service.to_string())
+    } else {
+        Err(ZapError::New(-1, "不支持的服务类型".to_string()))
+    }
+}
+
+/// 是否为 PHP 版本实例 svc（php74 / php81 …，排除类型级 "php"）。
+fn is_php_instance_svc(service: &str) -> bool {
+    service
+        .strip_prefix("php")
+        .is_some_and(|r| !r.is_empty() && r.len() <= 3 && r.chars().all(|c| c.is_ascii_digit()))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ServiceQuery {
+    pub service: String,
+}
+
+/// GET /system/service-conf/instances
+pub async fn instances(claims: ValidatedClaims, Query(q): Query<ServiceQuery>) -> ZapJsonResult {
+    require_admin(&claims)?;
+    let service = validate_service(&q.service).await?;
+    exec(Request::ServiceConfInstances { service }).await
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ServiceDefaultBody {
+    pub service: String,
+    pub enable: bool,
+}
+
+/// POST /system/service-conf/default
+pub async fn set_default(
+    claims: ValidatedClaims,
+    client_addr: Extension<SocketAddr>,
+    Json(body): Json<ServiceDefaultBody>,
+) -> ZapJsonResult {
+    require_admin(&claims)?;
+    let service = validate_service(&body.service).await?;
+    if !is_php_instance_svc(&service) {
+        return Err(ZapError::New(
+            -1,
+            "全局默认访问仅支持 PHP 版本实例（php74 / php81 …）".to_string(),
+        ));
+    }
+    let result = exec(Request::ServiceConfDefault {
+        service,
+        enable: body.enable,
+    })
+    .await;
+    if result.is_ok() {
+        audit::log(
+            Some(&claims),
+            Some(client_addr.ip().to_string().as_str()),
+            "service_conf_default",
+            "service-conf",
+            &format!(
+                "{} PHP 实例 {} 的全局默认访问",
+                if body.enable { "开启" } else { "取消" },
+                body.service
+            ),
+        )
+        .await;
+    }
+    result
+}
+
+// ── PHP 扩展管理（服务配置 → PHP → 扩展）──────────────────────
+//
+// 安装 / 卸载要现场编译（分钟级），所以走通用任务队列：这里只登记任务并把
+// 请求下发给 zapexec，日志由 `/appstore/ws/{run_id}` 流式回显，收尾靠
+// zapexec 写的 `__ZAP_DONE__`（见 zap/task.rs）。启用 / 禁用是秒级的，直接同步。
+
+#[derive(Debug, Deserialize)]
+pub struct PhpExtServiceQuery {
+    pub service: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PhpExtToggleBody {
+    pub service: String,
+    pub name: String,
+    pub enable: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PhpExtInstallBody {
+    pub service: String,
+    pub package: String,
+    /// 留空 = 最新稳定版
+    #[serde(default)]
+    pub version: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PhpExtRemoveBody {
+    pub service: String,
+    pub name: String,
+}
+
+/// GET /system/service-conf/php-ext/list
+pub async fn php_ext_list(
+    claims: ValidatedClaims,
+    Query(q): Query<PhpExtServiceQuery>,
+) -> ZapJsonResult {
+    require_admin(&claims)?;
+    let service = validate_service(&q.service).await?;
+    exec(Request::PhpExtList { service }).await
+}
+
+/// POST /system/service-conf/php-ext/toggle
+pub async fn php_ext_toggle(
+    claims: ValidatedClaims,
+    Json(body): Json<PhpExtToggleBody>,
+) -> ZapJsonResult {
+    require_admin(&claims)?;
+    let service = validate_service(&body.service).await?;
+    exec(Request::PhpExtToggle {
+        service,
+        name: body.name.clone(),
+        enable: body.enable,
+    })
+    .await
+}
+
+/// 登记一次扩展安装 / 卸载任务。
+///
+/// `make_req` 在日志路径确定后构造请求（请求里要带上同一个 log_path，
+/// 否则 zapexec 写日志和 zapd 读日志会指向两个文件）。
+async fn enqueue_ext_task<F>(
+    claims: &ValidatedClaims,
+    make_req: F,
+    pkg: &str,
+    title: &str,
+) -> Result<Json<serde_json::Value>, ZapError>
+where
+    F: FnOnce(String) -> Request,
+{
+    let task_id = crate::zap::task::new_id();
+    let log_path = crate::zap::task::log_path_in(&crate::zap::task::logs_dir(), &task_id);
+    let payload = serde_json::to_string(&make_req(log_path.clone()))
+        .map_err(|e| ZapError::New(-1, format!("任务参数序列化失败: {e}")))?;
+    let t = crate::zap::task::enqueue(crate::zap::task::NewTask {
+        task_id: task_id.clone(),
+        kind: crate::zap::task::KIND_PHP.to_string(),
+        action: "php_ext".to_string(),
+        pkg: pkg.to_string(),
+        username: claims.sub.clone(),
+        title: title.to_string(),
+        log_path,
+        job_key: String::new(),
+        // 同一时刻只编译一个扩展：并发编译会把机器压满，日志也不好读
+        group_key: "php-ext".to_string(),
+        group_limit: 1,
+        payload,
+    })
+    .await?;
+    let queued = t.status == crate::zap::task::STATUS_PENDING;
+    let position = if queued {
+        crate::zap::task::queue_position(&t).await
+    } else {
+        0
+    };
+    // 拿到槽位就立刻下发；排队中的由调度器放行（payload 已入库）
+    if !queued {
+        crate::zap::task::launch(&t).await?;
+    }
+    Ok(Json(json!({
+        "code": 0,
+        "message": "ok",
+        "data": { "task_id": task_id, "queued": queued, "position": position },
+    })))
+}
+
+/// POST /system/service-conf/php-ext/install
+pub async fn php_ext_install(
+    claims: ValidatedClaims,
+    Json(body): Json<PhpExtInstallBody>,
+) -> ZapJsonResult {
+    require_admin(&claims)?;
+    let service = validate_service(&body.service).await?;
+    let package = body.package.clone();
+    let version = body.version.clone();
+    let title = format!("安装 PHP 扩展 {package}");
+    enqueue_ext_task(
+        &claims,
+        |log_path| Request::PhpExtInstall {
+            service,
+            package,
+            version,
+            log_path,
+        },
+        &body.package,
+        &title,
+    )
+    .await
+}
+
+/// POST /system/service-conf/php-ext/remove
+pub async fn php_ext_remove(
+    claims: ValidatedClaims,
+    Json(body): Json<PhpExtRemoveBody>,
+) -> ZapJsonResult {
+    require_admin(&claims)?;
+    let service = validate_service(&body.service).await?;
+    let name = body.name.clone();
+    let title = format!("卸载 PHP 扩展 {name}");
+    enqueue_ext_task(
+        &claims,
+        |log_path| Request::PhpExtRemove {
+            service,
+            name,
+            log_path,
+        },
+        &body.name,
+        &title,
+    )
+    .await
+}
+
+/// GET /system/service-conf/defs：yaml 注册的服务定义清单（前端动态生成入口用）
+pub async fn defs_list(claims: ValidatedClaims) -> ZapJsonResult {
+    require_admin(&claims)?;
+    exec(Request::ServiceConfDefs).await
+}
+
+/// GET /system/service-conf/status
+pub async fn status(claims: ValidatedClaims, Query(q): Query<ServiceQuery>) -> ZapJsonResult {
+    require_admin(&claims)?;
+    let service = validate_service(&q.service).await?;
+    exec(Request::ServiceConfStatus { service }).await
+}
+
+/// GET /system/service-conf/list
+pub async fn conf_list(claims: ValidatedClaims, Query(q): Query<ServiceQuery>) -> ZapJsonResult {
+    require_admin(&claims)?;
+    let service = validate_service(&q.service).await?;
+    exec(Request::ServiceConfList { service }).await
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ServiceReadQuery {
+    pub service: String,
+    pub path: String,
+}
+
+/// GET /system/service-conf/read?service=..&path=..
+pub async fn conf_read(
+    claims: ValidatedClaims,
+    Query(q): Query<ServiceReadQuery>,
+) -> ZapJsonResult {
+    require_admin(&claims)?;
+    let service = validate_service(&q.service).await?;
+    exec(Request::ServiceConfRead {
+        service,
+        path: q.path,
+    })
+    .await
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ServiceSaveBody {
+    pub service: String,
+    pub path: String,
+    pub content: String,
+}
+
+/// POST /system/service-conf/save
+pub async fn conf_save(
+    claims: ValidatedClaims,
+    client_addr: Extension<SocketAddr>,
+    Json(body): Json<ServiceSaveBody>,
+) -> ZapJsonResult {
+    require_admin(&claims)?;
+    let service = validate_service(&body.service).await?;
+    let result = exec(Request::ServiceConfSave {
+        service,
+        path: body.path.clone(),
+        content: body.content.clone(),
+    })
+    .await;
+    if result.is_ok() {
+        audit::log(
+            Some(&claims),
+            Some(client_addr.ip().to_string().as_str()),
+            "service_conf_save",
+            "service-conf",
+            &format!("保存 {} 配置文件 {}", body.service, body.path),
+        )
+        .await;
+    }
+    result
+}
+
+/// GET /system/service-conf/keys
+pub async fn keys_get(claims: ValidatedClaims, Query(q): Query<ServiceQuery>) -> ZapJsonResult {
+    require_admin(&claims)?;
+    let service = validate_service(&q.service).await?;
+    exec(Request::ServiceConfKeys { service }).await
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ServiceKeysSaveBody {
+    pub service: String,
+    #[serde(default)]
+    pub keys: BTreeMap<String, String>,
+}
+
+/// POST /system/service-conf/keys/save
+pub async fn keys_save(
+    claims: ValidatedClaims,
+    client_addr: Extension<SocketAddr>,
+    Json(body): Json<ServiceKeysSaveBody>,
+) -> ZapJsonResult {
+    require_admin(&claims)?;
+    let service = validate_service(&body.service).await?;
+    let result = exec(Request::ServiceConfKeysSave {
+        service,
+        keys: body.keys.clone(),
+    })
+    .await;
+    if result.is_ok() {
+        audit::log(
+            Some(&claims),
+            Some(client_addr.ip().to_string().as_str()),
+            "service_conf_keys_save",
+            "service-conf",
+            &format!("保存 {} 关键配置", body.service),
+        )
+        .await;
+    }
+    result
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ServiceControlBody {
+    pub service: String,
+    pub action: String,
+}
+
+/// POST /system/service-conf/control
+pub async fn control(
+    claims: ValidatedClaims,
+    client_addr: Extension<SocketAddr>,
+    Json(body): Json<ServiceControlBody>,
+) -> ZapJsonResult {
+    require_admin(&claims)?;
+    let service = validate_service(&body.service).await?;
+    if !matches!(
+        body.action.as_str(),
+        "start" | "stop" | "restart" | "reload"
+    ) {
+        return Err(ZapError::New(
+            -1,
+            "仅支持 start / stop / restart / reload".to_string(),
+        ));
+    }
+    let result = exec(Request::ServiceConfControl {
+        service,
+        action: body.action.clone(),
+    })
+    .await;
+    if result.is_ok() {
+        audit::log(
+            Some(&claims),
+            Some(client_addr.ip().to_string().as_str()),
+            "service_conf_control",
+            "service-conf",
+            &format!("{} 服务操作 {}", body.service, body.action),
+        )
+        .await;
+    }
+    result
+}

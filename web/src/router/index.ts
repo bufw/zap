@@ -1,0 +1,579 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+import { createRouter, createWebHistory } from 'vue-router'
+import type { RouteRecordRaw } from 'vue-router'
+import { BASE } from '@/utils/base'
+
+import Layout from '@/layout/index.vue'
+import { useUserStore } from '@/stores/user'
+import { usePermissionStore } from '@/stores/permission'
+import { getMenusRevision } from '@/api/menu'
+import { BProgress } from '@bprogress/core'
+
+// 白名单路由
+const whiteList = ['/login']
+
+// 公共路由
+export const constantRoutes: Array<RouteRecordRaw> = [
+  {
+    path: '/redirect',
+    component: Layout,
+    meta: { hidden: true,affix:false },
+    children: [
+      {
+        path: '/redirect/:path(.*)',
+        meta: { hidden: true,affix:false },
+        component: () => import('@/views/redirect/index.vue'),
+      },
+    ],
+  },
+  {
+    path: '/login',
+    component: () => import('@/views/login/index.vue'),
+    meta: { hidden: true },
+  },
+  {
+    path: '/',
+    component: Layout,
+    redirect: '/dashboard',
+    children: [
+      {
+        path: 'dashboard',
+        name: 'Dashboard',
+        component: () => import('@/views/dashboard/index.vue'),
+        meta: { title: '仪表盘', icon: 'material-symbols:home', affix: true },
+      },
+    ],
+  },
+  {
+    path: '/profile',
+    component: Layout,
+    meta: { hidden: true },
+    children: [
+      {
+        path: '',
+        name: 'Profile',
+        component: () => import('@/views/profile/index.vue'),
+        meta: { title: '个人中心' , affix:false},
+      },
+    ],
+  },
+  {
+    path: '/messages',
+    component: Layout,
+    meta: { hidden: true },
+    children: [
+      {
+        path: '',
+        name: 'Messages',
+        component: () => import('@/views/messages/index.vue'),
+        meta: { title: '消息中心', affix: false },
+      },
+    ],
+  },
+  // 文档正文（CHANGELOG / 用户手册 / FAQ / 升级指南）
+  //
+  // 侧栏入口已整合进「系统设置 → About ZAP」（`/system/about`），这里只保留
+  // **路由**并 hidden：About 页与旧链接 `/docs/<id>` 始终可达，但不再占用侧边栏。
+  {
+    path: '/docs',
+    component: Layout,
+    redirect: '/system/about',
+    // title 只为面包屑服务（侧栏由后端 menus 下发，不看 constantRoutes）
+    meta: { hidden: true, title: '文档' },
+    children: [
+      // 旧着陆页 /docs/index 直接送到 About ZAP
+      { path: 'index', redirect: '/system/about', meta: { hidden: true } },
+      {
+        path: 'changelog',
+        name: 'DocsChangelog',
+        component: () => import('@/views/docs/doc.vue'),
+        meta: { title: '更新日志', hidden: true },
+      },
+      {
+        path: 'manual',
+        name: 'DocsManual',
+        component: () => import('@/views/docs/doc.vue'),
+        meta: { title: '用户手册', hidden: true },
+      },
+      {
+        path: 'faq',
+        name: 'DocsFaq',
+        component: () => import('@/views/docs/doc.vue'),
+        meta: { title: 'FAQ', hidden: true },
+      },
+      {
+        path: 'upgrade',
+        name: 'DocsUpgrade',
+        component: () => import('@/views/docs/doc.vue'),
+        meta: { title: '升级指南', hidden: true },
+      },
+    ],
+  },
+  // About ZAP：菜单里已删除（入口在首页快捷入口 / 页脚品牌位），
+  // 这里常驻注册——不走后端菜单下发，任何登录角色都能直达。
+  {
+    path: '/system/about',
+    component: Layout,
+    meta: { hidden: true, title: 'About ZAP' },
+    children: [
+      {
+        path: '',
+        name: 'SystemAbout',
+        component: () => import('@/views/system/about/index.vue'),
+        meta: { title: 'About ZAP', hidden: true },
+      },
+    ],
+  },
+]
+
+// 动态路由，基于用户权限动态加载
+//
+// 注意：仪表盘不再在此定义 —— constantRoutes 的 `/` 已用 Layout 包裹并提供
+// `/dashboard` 子路由。此处若再顶格定义 `/dashboard`（无 Layout），
+// 菜单接口失败回退到本表时会匹配到它，登录后只剩裸 dashboard（无顶栏/侧边栏）。
+export const asyncRoutes: Array<RouteRecordRaw> = [
+  {
+    path: '/system',
+    component: Layout,
+    redirect: '/system/access',
+    meta: { title: '系统设置', icon: 'material-symbols:settings', roles: ['admin'] },
+    children: [
+      {
+        path: 'zap-config',
+        name: 'ZapConfig',
+        component: () => import('@/views/system/config/zap.vue'),
+        meta: { title: 'Zap 设置', icon: 'material-symbols:settings-applications' },
+      },
+      // 用户管理与角色管理已合并为一页（页内 nav pill 切换）：见 menus 21 / 22
+      {
+        path: 'access',
+        name: 'Access',
+        component: () => import('@/views/system/access/index.vue'),
+        meta: { title: '用户与角色', icon: 'material-symbols:badge', affix: true },
+      },
+      {
+        path: 'menus',
+        name: 'Menus',
+        component: () => import('@/views/system/menus/index.vue'),
+        meta: { title: '菜单管理', icon: 'material-symbols:menu' , affix: true},
+      },
+      {
+        path: 'tasks',
+        name: 'SystemTasks',
+        component: () => import('@/views/system/tasks/index.vue'),
+        meta: { title: '任务队列', icon: 'material-symbols:view-list' },
+      },
+      // 自定义脚本 + 计划任务已合并为一页「自动化脚本」（页内 nav pill 切换）：见 menus 101 / 102
+      // 菜单接口挂掉时回退到本表，这个页面不能跟着一起消失。
+      {
+        path: 'automation',
+        name: 'AutomationScripts',
+        component: () => import('@/views/automation/index.vue'),
+        meta: { title: '自动化脚本', icon: 'material-symbols:timer' },
+      },
+
+
+    ],
+  },
+  // 文件管理（Layout 包裹 + 一级直链）
+  {
+    path: '/files',
+    component: Layout,
+    redirect: '/files/index',
+    meta: { title: '文件管理', icon: 'material-symbols:folder', roles: ['admin', 'user', 'reseller'] },
+    children: [
+      {
+        path: 'index',
+        name: 'FileManager',
+        component: () => import('@/views/files/index.vue'),
+        meta: { title: '文件管理', icon: 'material-symbols:folder', affix: true },
+      },
+    ],
+  },
+  // 站点管理（Layout 包裹 + 一级直链：admin 全部 / reseller 所属客户 / user 自己的站点）
+  {
+    path: '/site',
+    component: Layout,
+    redirect: '/site/index',
+    meta: { title: '站点', icon: 'material-symbols:public', roles: ['admin', 'user', 'reseller'] },
+    children: [
+      {
+        path: 'index',
+        name: 'SiteIndex',
+        component: () => import('@/views/site/index.vue'),
+        meta: { title: '站点', icon: 'material-symbols:public', affix: true },
+        },
+        ],
+        },
+        // 数据库管理（菜单实际由后端 /system/menus/tree 下发，这里仅作接口失败时的回退）
+        {
+        path: '/database',
+        component: Layout,
+        redirect: '/database/index',
+        meta: { title: '数据库', icon: 'material-symbols:database', roles: ['admin', 'user'] },
+        children: [
+        {
+        path: 'index',
+        name: 'DatabaseIndex',
+        component: () => import('@/views/database/index.vue'),
+        meta: { title: '数据库', icon: 'material-symbols:database', affix: true },
+        },
+        ],
+        },
+  // 团队成员（子账号）：入口已移入「个人中心」的 pill（见 views/profile/index.vue），
+  // 侧边栏不再显示（后端菜单 hidden=1）。这里保留路由并指向新位置，旧链接不会失效。
+  {
+    path: '/team',
+    component: Layout,
+    redirect: '/profile?tab=team',
+    meta: { title: '团队成员', icon: 'material-symbols:group', roles: ['admin', 'user', 'reseller'] },
+    children: [
+      {
+        path: 'index',
+        name: 'TeamIndex',
+        component: () => import('@/views/team/index.vue'),
+        meta: { title: '团队成员', icon: 'material-symbols:group', affix: true },
+      },
+    ],
+  },
+  // SSL/TLS（Layout 包裹 + 一级直链：admin / user）
+  {
+    path: '/ssl-tls',
+    component: Layout,
+    redirect: '/ssl-tls/certs',
+    meta: { title: 'SSL/TLS', icon: 'material-symbols:lock', roles: ['admin', 'user'] },
+    children: [
+      {
+        path: 'certs',
+        name: 'SslCerts',
+        component: () => import('@/views/ssl-tls/certs/index.vue'),
+        meta: { title: 'SSL 证书', icon: 'material-symbols:lock', affix: true },
+      },
+      {
+        path: 'dns-providers',
+        name: 'SslDnsProviders',
+        component: () => import('@/views/ssl-tls/dns-providers/index.vue'),
+        // 侧栏入口已改到证书页的抽屉里（与后端 menus.hidden 保持一致）：
+        // 路由保留让旧链接可达，回退到本表时也不会再画出二级菜单。
+        meta: { title: 'DNS 服务商', icon: 'material-symbols:dns', hidden: true },
+      },
+    ],
+  },
+  // 服务器配置
+  {
+    path: '/server',
+    component: Layout,
+    redirect: '/server/system',
+    meta: { title: '服务器配置', icon: 'material-symbols:tune', roles: ['admin'] },
+    children: [
+      // 系统管理：服务器时间 / 系统服务 / SSH 服务 / 进程管理 合成一页（页内 nav pill）
+      {
+        path: 'system',
+        name: 'ServerSystem',
+        component: () => import('@/views/server/system/index.vue'),
+        meta: { title: '系统管理', icon: 'material-symbols:settings', affix: true },
+      },
+      // 服务配置：Nginx / PHP / MySQL 各自的配置，页面内用 nav pill 切换
+      {
+        path: 'service-conf',
+        name: 'ServerServiceConf',
+        component: () => import('@/views/server/service-conf/index.vue'),
+        meta: { title: '服务配置', icon: 'material-symbols:dns', affix: true },
+      },
+      // 网络配置：网络设置 + IP 设置 合成一页
+      {
+        path: 'network',
+        name: 'ServerNetwork',
+        component: () => import('@/views/server/network/index.vue'),
+        meta: { title: '网络配置', icon: 'material-symbols:link', affix: true },
+      },
+      {
+        path: 'firewall',
+        name: 'ServerFirewall',
+        component: () => import('@/views/server/firewall/index.vue'),
+        meta: { title: '防火墙', icon: 'material-symbols:lock', affix: true },
+      },
+      // 运行环境：探测结果 + 同步运行实体 合成一页
+      {
+        path: 'env',
+        name: 'ServerEnv',
+        component: () => import('@/views/server/env/index.vue'),
+        meta: { title: '运行环境', icon: 'material-symbols:auto-fix-high', affix: true },
+      },
+      {
+        path: 'migrate',
+        name: 'ServerMigrate',
+        component: () => import('@/views/server/migrate/index.vue'),
+        meta: { title: '数据迁移', icon: 'material-symbols:sort', affix: true },
+      },
+    ],
+  },
+  // 服务器状态（服务器信息 tabs + Nginx Server 独立子页）
+  {
+    path: '/server-status',
+    component: Layout,
+    redirect: '/server-status/index',
+    meta: { title: '服务器状态', icon: 'material-symbols:monitor-heart', roles: ['admin'] },
+    children: [
+      {
+        path: 'index',
+        name: 'ServerStatusIndex',
+        component: () => import('@/views/server-status/index.vue'),
+        meta: { title: 'Server Monitor', icon: 'material-symbols:monitoring', affix: true },
+      },
+      {
+        path: 'nginx-server',
+        name: 'ServerStatusNginx',
+        component: () => import('@/views/server-status/nginx-server/index.vue'),
+        meta: { title: 'Nginx Server', icon: 'material-symbols:monitor', affix: true },
+      },
+      // 主配置可视化不单独占路由/菜单，作为「服务配置 → Nginx」页的一个页签
+      {
+        path: 'process',
+        name: 'ServerStatusProcess',
+        component: () => import('@/views/server-status/process/index.vue'),
+        meta: { title: '进程管理', icon: 'material-symbols:memory', affix: true },
+      },
+      {
+        path: 'services',
+        name: 'ServerStatusServices',
+        component: () => import('@/views/server-status/services/index.vue'),
+        meta: { title: '系统服务', icon: 'material-symbols:miscellaneous-services', affix: true },
+      },
+      {
+        path: 'logs',
+        name: 'ServerStatusLogs',
+        component: () => import('@/views/server-status/logs/index.vue'),
+        meta: { title: '日志查看器', icon: 'material-symbols:article', affix: true },
+      },
+    ],
+  },
+  // 终端管理（Layout 包裹 + 一级直链）
+  {
+    path: '/terminal',
+    component: Layout,
+    redirect: '/terminal/index',
+    meta: { title: '终端', icon: 'material-symbols:monitor', roles: ['admin', 'user', 'reseller'] },
+    children: [
+      {
+        path: 'index',
+        name: 'Terminal',
+        component: () => import('@/views/terminal/index.vue'),
+        meta: { title: '终端', icon: 'material-symbols:monitor', affix: true },
+          },
+        ],
+        },
+        // 通知设置（Layout 包裹 + 一级直链：admin / user / reseller；菜单接口失败时回退）
+        {
+        path: '/notify',
+        component: Layout,
+        redirect: '/notify/index',
+        meta: {
+          title: '通知设置',
+          icon: 'material-symbols:notifications',
+          roles: ['admin', 'user', 'reseller'],
+        },
+        children: [
+          {
+            path: 'index',
+            name: 'NotifyIndex',
+            component: () => import('@/views/notify/index.vue'),
+            meta: { title: '通知设置', icon: 'material-symbols:notifications', affix: true },
+          },
+        ],
+        },
+        // 404 页面必须放在末尾
+  {
+    path: '/:pathMatch(.*)*',
+    component: () => import('@/views/error-page/404.vue'),
+    meta: { hidden: true },
+  },
+  // 旧入口：已安装应用已并入应用商店页内页签（nav pill），这里兜底重定向
+  {
+    path: '/appstore/installed',
+    redirect: '/appstore',
+    meta: { hidden: true },
+  },
+  // 旧入口：插件管理已并入应用商店页内「插件」页签（nav pill），连 tab 一起带到新地址
+  {
+    path: '/dev/plugins',
+    redirect: { path: '/appstore', query: { tab: 'plugins' } },
+    meta: { hidden: true },
+  },
+  // 旧入口：自定义脚本 / 计划任务已并入「自动化脚本」页内页签，连 tab 一起带到新地址
+  {
+    path: '/system/scripts',
+    redirect: '/system/automation?tab=scripts',
+    meta: { hidden: true },
+  },
+  {
+    path: '/system/cron',
+    redirect: '/system/automation?tab=cron',
+    meta: { hidden: true },
+  },
+  // 旧入口：系统更新已并入 About ZAP 页内页签，连 tab 一起带到新地址
+  {
+    path: '/system/update',
+    redirect: '/system/about?tab=update',
+    meta: { hidden: true },
+  },
+]
+
+// 路由滚动策略：
+// - 带 hash（同页锚点直达 / 点击页内目录）→ 平滑滚动到目标元素。
+//   .app-main 才是实际滚动容器，vue-router 的 el 定位走 scrollIntoView，可穿透定位；
+//   目标不存在时回退顶部。
+// - 其余导航 → 回到顶部。
+const router = createRouter({
+  // 带上后端配置的前缀（zap.yaml 的 server.url_prefix），无前缀时为 '/'
+  history: createWebHistory(BASE || '/'),
+  routes: constantRoutes,
+  scrollBehavior: (to) => {
+    if (to.hash && document.querySelector(to.hash)) {
+      return { el: to.hash, behavior: 'smooth' }
+    }
+    return { left: 0, top: 0 }
+  },
+})
+
+// 重置路由
+export function resetRouter() {
+  const newRouter = createRouter({
+    history: createWebHistory(BASE || '/'),
+    routes: constantRoutes,
+    scrollBehavior: (to) => {
+      if (to.hash && document.querySelector(to.hash)) {
+        return { el: to.hash, behavior: 'smooth' }
+      }
+      return { left: 0, top: 0 }
+    },
+  })
+  ;(router as any).matcher = (newRouter as any).matcher
+}
+
+
+
+/**
+ * 挂载后端菜单生成的路由（含 404 兜底）。
+ *
+ * 调用方保证：尚未挂载，或已 `resetRouter()` —— 否则同一份路由会被重复 addRoute。
+ */
+async function mountMenus(roles: string[]) {
+  const permissionStore = usePermissionStore()
+  await permissionStore.generateRoutes(roles)
+
+  permissionStore.routes.forEach((route) => {
+    router.addRoute(route)
+  })
+
+  // 添加404页面
+  // 注意：这里必须直接渲染 404 组件，不能写成 redirect: '/404' ——
+  // '/404' 本身没有真实路由，会再次命中本 catch-all，形成同步自递归
+  // （pushWithRedirect 无限循环 → RangeError: Maximum call stack size）。
+  // 任何未注册路径（比如角色没有的菜单）都会落到这里，所以必须是组件兜底。
+  router.addRoute({
+    path: '/:pathMatch(.*)*',
+    component: () => import('@/views/error-page/404.vue'),
+    meta: { hidden: true },
+  })
+}
+
+/** 菜单指纹的最小比对间隔：能力变化（装上 / 卸载 Docker）很低频，没必要每次导航都问。 */
+const MENU_REVISION_MIN_INTERVAL = 30_000
+let lastMenuRevisionCheckAt = 0
+
+/**
+ * 能力 / 授权变化后重建菜单：指纹变了就重拉菜单树。
+ *
+ * 背景：像「容器管理」这种入口依赖宿主机有没有装 Docker，但这个信息在**登录那一刻**
+ * 就固化进侧栏了。装完之后若没有任何感知手段，用户只能手动刷新浏览器。
+ *
+ * @returns 菜单是否被重建（守卫据此决定是否重写导航目标）
+ */
+async function ensureMenusFresh(roles: string[]): Promise<boolean> {
+  const now = Date.now()
+  if (now - lastMenuRevisionCheckAt < MENU_REVISION_MIN_INTERVAL) return false
+  lastMenuRevisionCheckAt = now
+
+  const permissionStore = usePermissionStore()
+  let revision = ''
+  try {
+    const resp = await getMenusRevision()
+    revision = String(resp.data?.revision ?? '')
+  } catch {
+    return false
+  }
+  if (!revision || revision === permissionStore.revision) return false
+
+  resetRouter()
+  await mountMenus(roles)
+  return true
+}
+
+router.beforeEach(async (to, from, next) => {
+  BProgress.start()
+
+  const userStore = useUserStore()
+  const permissionStore = usePermissionStore()
+
+  // 获取token
+  const hasToken = userStore.token
+
+  if (hasToken) {
+    if (to.path === '/login') {
+      // 已登录且要跳转的页面是登录页
+      next({ path: '/' })
+      BProgress.done()
+    } else {
+      // 检查用户信息和权限菜单是否已获取
+      const hasRoles = userStore.roles && userStore.roles.length > 0
+      const hasMenus = permissionStore.routes && permissionStore.routes.length > 0
+
+      if (hasRoles && hasMenus) {
+        // 菜单已是上一版：先按需同步（能力变化 → 重建），再放行。
+        const remounted = await ensureMenusFresh(userStore.roles)
+        if (remounted) {
+          next({ ...to, replace: true })
+        } else {
+          next()
+        }
+      } else {
+        try {
+          // 获取用户信息
+          await userStore.getInfoAction()
+
+          // 根据角色生成可访问路由并挂载（含 404 兜底）
+          await mountMenus(userStore.roles)
+
+          // 请求带有 redirect 重定向时，登录自动重定向到该地址
+          const redirectPath = from.query.redirect || to.path
+          const redirect = decodeURIComponent(redirectPath as string)
+          const nextData = to.path === redirect ? { ...to, replace: true } : { path: redirect }
+          next(nextData)
+        } catch (error) {
+          // 移除 token 并跳转登录页
+          await userStore.resetToken()
+          next(`/login?redirect=${to.path}`)
+          BProgress.done()
+        }
+      }
+    }
+  } else {
+    // 未登录
+    if (whiteList.indexOf(to.path) !== -1) {
+      // 在免登录白名单，直接进入
+      next()
+    } else {
+      // 其他没有访问权限的页面将被重定向到登录页面
+      next(`/login?redirect=${to.path}`)
+      BProgress.done()
+    }
+  }
+})
+
+router.afterEach(() => {
+  BProgress.done()
+})
+
+
+export default router

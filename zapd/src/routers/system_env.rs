@@ -1,0 +1,626 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//! 服务器运行环境管理。
+//!
+//! 状态存放于 `{data}/server_env.yaml`（见 [`crate::zap::server_env`]），分两层：
+//! - `auto`：zapexec(root) 自动探测的快照（payload=整份 JSON），记录 detected 时间；
+//! - `conf`：管理员手写的全局默认配置（webserver / php_default / database 等），
+//!   供后续建站默认 PHP、SSL 签发等流程读取。
+//!
+//! 端点（均需管理员）：
+//! - GET  /system/env             读快照+默认配置；快照超 60s 自动刷新
+//! - POST /system/env/refresh     强制重测并写入 server_env.yaml
+//! - POST /system/env/defaults    保存全局默认配置
+
+use std::collections::HashMap;
+use std::net::SocketAddr;
+
+use axum::Json;
+use axum::extract::Extension;
+use serde::Deserialize;
+use serde_json::{Value, json};
+
+use crate::zap::ZapError;
+use crate::zap::ZapJsonResult;
+use crate::zap::audit;
+use crate::zap::jwt::ValidatedClaims;
+use crate::zap::jwt::is_admin;
+use crate::zap::server_env;
+use zap_proto::Request;
+
+#[derive(Deserialize)]
+pub struct EnvPythonPayload {
+    /// 版本号，如 `3.12` / `3.11.9`
+    pub version: String,
+}
+
+#[derive(Deserialize)]
+pub struct EnvPythonIndexPayload {
+    /// PyPI 源地址；空 = 官方源
+    pub index_url: String,
+}
+
+#[derive(Deserialize)]
+pub struct EnvNodejsPayload {
+    /// install | default | uninstall
+    pub action: String,
+    /// 版本号，如 `20` / `20.11.1`
+    pub version: String,
+    /// 下载镜像：official（默认）/ china；不传就跟随全局配置
+    pub mirror: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct EnvMirrorPayload {
+    /// 下载镜像：official / china；空 = 跟随全局配置
+    pub mirror: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct EnvRegistryPayload {
+    /// npm registry 地址，如 https://registry.npmmirror.com/
+    pub registry: String,
+}
+
+/// 全局下载镜像：official（默认，直连官方源）/ china（走国内镜像）。
+pub fn download_mirror() -> String {
+    let v = server_env::conf_get("download_mirror").unwrap_or_default();
+    if v == "china" {
+        "china".to_string()
+    } else {
+        "official".to_string()
+    }
+}
+
+/// 取本次请求的镜像：以请求参数为准，没传就跟随全局配置。
+fn pick_mirror(req: Option<&String>) -> String {
+    match req.map(|s| s.trim()).unwrap_or_default() {
+        "china" => "china".to_string(),
+        "official" => "official".to_string(),
+        _ => download_mirror(),
+    }
+}
+
+/// 全局默认 Python 版本（uv 管理）。应用部署未指定版本时用它。
+pub fn python_default() -> String {
+    server_env::conf_get("python_default").unwrap_or_default()
+}
+
+/// 全局默认 Node 版本（fnm 管理）。应用部署未指定版本时用它。
+pub fn node_default() -> String {
+    server_env::conf_get("node_default").unwrap_or_default()
+}
+
+/// 一键安装 uv（装到 /usr/local/bin，所有用户可用）。
+pub async fn env_uv_install(
+    claims: ValidatedClaims,
+    client_addr: Extension<SocketAddr>,
+) -> ZapJsonResult {
+    if !is_admin(&claims) {
+        return Err(ZapError::New(-1, "仅管理员可安装 uv".to_string()));
+    }
+    let resp = crate::zapexec::call(Request::EnvPython {
+        action: "install_uv".to_string(),
+        version: String::new(),
+        extra: download_mirror(),
+    })
+    .await?;
+    if resp.code != 0 {
+        return Err(ZapError::New(-1, resp.message));
+    }
+    audit::log(
+        Some(&claims),
+        Some(client_addr.ip().to_string().as_str()),
+        "env_uv_install",
+        "",
+        "",
+    )
+    .await;
+    let _ = refresh_snapshot_now().await;
+    Ok(Json(
+        json!({ "code": 0, "message": resp.message, "data": resp.data }),
+    ))
+}
+
+/// 切换 PyPI 源（写系统级 uv / pip 配置）；留空表示回到官方源。
+pub async fn env_python_index(
+    claims: ValidatedClaims,
+    client_addr: Extension<SocketAddr>,
+    Json(payload): Json<EnvPythonIndexPayload>,
+) -> ZapJsonResult {
+    if !is_admin(&claims) {
+        return Err(ZapError::New(-1, "仅管理员可设置 PyPI 源".to_string()));
+    }
+    let url = payload.index_url.trim().to_string();
+    let url = if url.is_empty() {
+        "https://pypi.org/simple".to_string()
+    } else {
+        url
+    };
+    let resp = crate::zapexec::call(Request::EnvPython {
+        action: "set_index".to_string(),
+        version: String::new(),
+        extra: url.clone(),
+    })
+    .await?;
+    if resp.code != 0 {
+        return Err(ZapError::New(-1, resp.message));
+    }
+    audit::log(
+        Some(&claims),
+        Some(client_addr.ip().to_string().as_str()),
+        "env_python_index",
+        &format!("url={url}"),
+        "",
+    )
+    .await;
+    let _ = refresh_snapshot_now().await;
+    Ok(Json(
+        json!({ "code": 0, "message": resp.message, "data": resp.data }),
+    ))
+}
+
+/// 一键安装 fnm（装到 /usr/local/fnm，所有用户可用）。
+pub async fn env_fnm_install(
+    claims: ValidatedClaims,
+    client_addr: Extension<SocketAddr>,
+    payload: Option<Json<EnvMirrorPayload>>,
+) -> ZapJsonResult {
+    if !is_admin(&claims) {
+        return Err(ZapError::New(-1, "仅管理员可安装 fnm".to_string()));
+    }
+    let mirror = pick_mirror(payload.as_ref().and_then(|p| p.mirror.as_ref()));
+    let resp = crate::zapexec::call(Request::EnvNodejs {
+        action: "install_fnm".to_string(),
+        version: String::new(),
+        extra: mirror.clone(),
+    })
+    .await?;
+    if resp.code != 0 {
+        return Err(ZapError::New(-1, resp.message));
+    }
+    audit::log(
+        Some(&claims),
+        Some(client_addr.ip().to_string().as_str()),
+        "env_fnm_install",
+        &format!("mirror={mirror}"),
+        "",
+    )
+    .await;
+    let _ = refresh_snapshot_now().await;
+    Ok(Json(
+        json!({ "code": 0, "message": resp.message, "data": resp.data }),
+    ))
+}
+
+/// 安装 / 设为默认 / 卸载 Node 版本（fnm，全局）。
+pub async fn env_nodejs_action(
+    claims: ValidatedClaims,
+    client_addr: Extension<SocketAddr>,
+    Json(payload): Json<EnvNodejsPayload>,
+) -> ZapJsonResult {
+    if !is_admin(&claims) {
+        return Err(ZapError::New(-1, "仅管理员可管理 Node 版本".to_string()));
+    }
+    let action = payload.action.trim().to_string();
+    if !["install", "default", "uninstall"].contains(&action.as_str()) {
+        return Err(ZapError::Key(
+            -1,
+            "api.common.unsupportedOp".to_string(),
+            "不支持的操作".to_string(),
+        ));
+    }
+    let version = payload.version.trim().to_string();
+    if version.is_empty() || version.len() > 16 {
+        return Err(ZapError::New(-1, "版本号不合法".to_string()));
+    }
+    let mirror = pick_mirror(payload.mirror.as_ref());
+    let resp = crate::zapexec::call(Request::EnvNodejs {
+        action: action.clone(),
+        version: version.clone(),
+        extra: mirror.clone(),
+    })
+    .await?;
+    if resp.code != 0 {
+        return Err(ZapError::New(-1, resp.message));
+    }
+    audit::log(
+        Some(&claims),
+        Some(client_addr.ip().to_string().as_str()),
+        "env_nodejs_action",
+        &format!("action={action} version={version} mirror={mirror}"),
+        "",
+    )
+    .await;
+    let _ = refresh_snapshot_now().await;
+    Ok(Json(
+        json!({ "code": 0, "message": resp.message, "data": resp.data }),
+    ))
+}
+
+/// 用 uv 安装一个 Python 版本（admin）。
+pub async fn env_python_install(
+    claims: ValidatedClaims,
+    client_addr: Extension<SocketAddr>,
+    Json(payload): Json<EnvPythonPayload>,
+) -> ZapJsonResult {
+    if !is_admin(&claims) {
+        return Err(ZapError::New(-1, "仅管理员可安装 Python 版本".to_string()));
+    }
+    let version = payload.version.trim().to_string();
+    if version.is_empty() || version.len() > 32 {
+        return Err(ZapError::New(-1, "版本号不合法".to_string()));
+    }
+    let resp = crate::zapexec::call(Request::EnvPython {
+        action: "install".to_string(),
+        version: version.clone(),
+        extra: String::new(),
+    })
+    .await?;
+    if resp.code != 0 {
+        return Err(ZapError::New(-1, resp.message));
+    }
+    audit::log(
+        Some(&claims),
+        Some(client_addr.ip().to_string().as_str()),
+        "env_python_install",
+        &format!("version={version}"),
+        "",
+    )
+    .await;
+    let _ = refresh_snapshot_now().await;
+    Ok(Json(
+        json!({ "code": 0, "message": resp.message, "data": resp.data }),
+    ))
+}
+
+/// 卸载 uv 管理的 Python 版本（admin）。
+pub async fn env_python_remove(
+    claims: ValidatedClaims,
+    client_addr: Extension<SocketAddr>,
+    Json(payload): Json<EnvPythonPayload>,
+) -> ZapJsonResult {
+    if !is_admin(&claims) {
+        return Err(ZapError::New(-1, "仅管理员可卸载 Python 版本".to_string()));
+    }
+    let version = payload.version.trim().to_string();
+    if version.is_empty() || version.len() > 32 {
+        return Err(ZapError::New(-1, "版本号不合法".to_string()));
+    }
+    let resp = crate::zapexec::call(Request::EnvPython {
+        action: "uninstall".to_string(),
+        version: version.clone(),
+        extra: String::new(),
+    })
+    .await?;
+    if resp.code != 0 {
+        return Err(ZapError::New(-1, resp.message));
+    }
+    audit::log(
+        Some(&claims),
+        Some(client_addr.ip().to_string().as_str()),
+        "env_python_remove",
+        &format!("version={version}"),
+        "",
+    )
+    .await;
+    let _ = refresh_snapshot_now().await;
+    Ok(Json(
+        json!({ "code": 0, "message": resp.message, "data": resp.data }),
+    ))
+}
+
+/// 设置 npm registry（写 /etc/npmrc，所有用户 npm install 都走它）。
+pub async fn env_node_registry(
+    claims: ValidatedClaims,
+    client_addr: Extension<SocketAddr>,
+    Json(payload): Json<EnvRegistryPayload>,
+) -> ZapJsonResult {
+    if !is_admin(&claims) {
+        return Err(ZapError::New(-1, "仅管理员可设置 npm 源".to_string()));
+    }
+    let registry = payload.registry.trim().to_string();
+    if registry.is_empty() || !registry.starts_with("http") {
+        return Err(ZapError::New(-1, "registry 地址不合法".to_string()));
+    }
+    // exec 侧用 version 字段接收地址（该动词的附加参数槽位）
+    let resp = crate::zapexec::call(Request::EnvNodejs {
+        action: "set_registry".to_string(),
+        version: registry.clone(),
+        extra: String::new(),
+    })
+    .await?;
+    if resp.code != 0 {
+        return Err(ZapError::New(-1, resp.message));
+    }
+    audit::log(
+        Some(&claims),
+        Some(client_addr.ip().to_string().as_str()),
+        "env_node_registry",
+        &format!("registry={registry}"),
+        "",
+    )
+    .await;
+    let _ = refresh_snapshot_now().await;
+    Ok(Json(
+        json!({ "code": 0, "message": resp.message, "data": resp.data }),
+    ))
+}
+
+/// 安装 / 改动运行时后立刻重测并写快照。
+///
+/// GET 读的是快照，最多有 60s 的陈旧窗口：装完 fnm 马上刷新页面，
+/// 拿到的还是「未安装」。这里让写操作自己负责刷新。
+async fn refresh_snapshot_now() {
+    if let Ok(payload) = probe_payload().await {
+        save_snapshot(&payload);
+    }
+}
+
+/// 快照超过该秒数后在 GET 时自动重测。
+const SNAPSHOT_STALE_SECS: i64 = 60;
+
+// ── 内部存取 ────────────────────────────────────────────────
+
+async fn probe_payload() -> Result<Value, ZapError> {
+    server_env::probe().await.map_err(|e| ZapError::New(-1, e))
+}
+
+/// 保存探测快照（写入 server_env.yaml 的 auto 区，detected_at 即检测时间）。
+fn save_snapshot(payload: &Value) -> i64 {
+    server_env::save_snapshot(payload)
+}
+
+/// 读取快照 (payload, detected_at)。
+fn load_snapshot() -> (Option<Value>, i64) {
+    server_env::snapshot()
+}
+
+fn load_conf() -> HashMap<String, String> {
+    server_env::conf_all().into_iter().collect()
+}
+
+/// 面板默认 PHP-FPM pool 规格（JSON 对象；用户未自定义时的兜底）。
+///
+/// 默认走 `ondemand`（按需拉起）：面板站点一律「独立系统用户 + 独立 pool」，
+/// 绝大多数 pool 常年没人访问（只有 phpMyAdmin 这类偶尔用一下），而 dynamic 会给每个
+/// PHP 版本常驻若干空闲 worker。按需模式下空闲即回收、有请求才拉起，省下的是常驻内存。
+/// 真正的热点站点由管理员单独改用 dynamic/static 的规格模板。
+pub fn default_fpm_spec() -> serde_json::Map<String, Value> {
+    let mut spec: serde_json::Map<String, Value> = [
+        ("pm", "ondemand"),
+        ("max_children", "10"),
+        // start_servers / min_spare_servers / max_spare_servers 是 dynamic 专属，
+        // 按需模式下写了也不生效，故不进默认规格（缺的话由 zapexec 侧兜底）。
+        ("max_requests", "1000"),
+        ("request_terminate_timeout", "300"),
+        ("memory_limit", "256M"),
+        ("post_max_size", "128M"),
+        ("upload_max_filesize", "128M"),
+        ("max_execution_time", "300"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), Value::String(v.to_string())))
+    .collect();
+    // 全局错误日志：集中到 /var/log/zap/php/ 下，`{user}` 占位符渲染时替换为
+    // pool 的 Linux 账号 —— 每个 pool 一个文件，避免多用户抢写同一文件。
+    // 单用户规格模板默认走 {home}/logs/php-error.log（随账号隔离）；
+    // zapexec 会自动建目录、预建文件并 chown 给 pool 用户，open_basedir 也同步放行。
+    // disable_functions 默认禁用高危函数（命令执行 / 代码执行与信息泄露 / 文件提权三类）；
+    // 放进全局默认配置后，可在「全局默认配置」对话框里直接查看 / 覆盖。
+    spec.insert(
+        "php_admin_value".to_string(),
+        Value::Object(
+            serde_json::json!({
+                "error_log": "/var/log/zap/php/{user}-error.log",
+                "disable_functions": "exec,passthru,shell_exec,system,proc_open,popen,pcntl_exec,eval,assert,create_function,show_source,phpinfo,chmod,chown,chgrp,symlink,link"
+            })
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+        ),
+    );
+    spec
+}
+
+fn default_fpm_spec_json() -> String {
+    serde_json::Value::Object(default_fpm_spec()).to_string()
+}
+
+/// 虚拟主机运行模式：**固定为独立系统用户**。
+///
+/// 每个面板用户对应一个 Linux 账号（nologin），家目录与站点目录归该账号，
+/// PHP-FPM 以「每用户 × 每 PHP 版本」独立 pool 运行。
+/// 历史上的「统一 www 用户」模式已移除，该常量仅用于向脚本注入 `ZAP_RUN_MODE`。
+pub const VHOST_MODE: &str = "system";
+
+fn conf_json(conf: &HashMap<String, String>) -> Value {
+    json!({
+        "webserver": conf.get("webserver").cloned().unwrap_or_default(),
+        "php_default": conf.get("php_default").cloned().unwrap_or_default(),
+        "python_default": conf.get("python_default").cloned().unwrap_or_default(),
+        "node_default": conf.get("node_default").cloned().unwrap_or_default(),
+        "download_mirror": conf.get("download_mirror").cloned().unwrap_or_default(),
+        "database": conf.get("database").cloned().unwrap_or_default(),
+        "fpm_pool_defaults": conf.get("fpm_pool_defaults").cloned().unwrap_or_else(default_fpm_spec_json),
+        "user_home_root": conf.get("user_home_root").cloned().unwrap_or_else(|| "/home".into()),
+    })
+}
+
+/// 拼装 GET / refresh 的返回体。
+fn build_env_data(
+    payload: Option<Value>,
+    detected_at: i64,
+    refreshed: bool,
+    error: Option<String>,
+) -> Value {
+    let conf = load_conf();
+    json!({
+        "payload": payload.unwrap_or(Value::Null),
+        "conf": conf_json(&conf),
+        "detected_at": detected_at,
+        "refreshed": refreshed,
+        "error": error,
+    })
+}
+
+// ── handlers ────────────────────────────────────────────────
+
+/// GET /system/env：读快照；超时则自动重测。
+pub async fn env_get(claims: ValidatedClaims) -> ZapJsonResult {
+    if !is_admin(&claims) {
+        return Err(ZapError::New(-1, "仅管理员可查看运行环境".to_string()));
+    }
+    let now = chrono::Local::now().timestamp();
+    let (payload, detected_at) = load_snapshot();
+    let stale = payload.is_none() || now - detected_at > SNAPSHOT_STALE_SECS;
+
+    if stale {
+        match probe_payload().await {
+            Ok(v) => {
+                let t = save_snapshot(&v);
+                crate::zap::api_ok(build_env_data(Some(v), t, true, None))
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                crate::zap::api_ok(build_env_data(payload, detected_at, false, Some(msg)))
+            }
+        }
+    } else {
+        crate::zap::api_ok(build_env_data(payload, detected_at, false, None))
+    }
+}
+
+/// POST /system/env/refresh：强制探测并刷新快照。
+pub async fn env_refresh(
+    claims: ValidatedClaims,
+    client_addr: Extension<SocketAddr>,
+) -> ZapJsonResult {
+    if !is_admin(&claims) {
+        return Err(ZapError::New(-1, "仅管理员可刷新运行环境".to_string()));
+    }
+    let payload = probe_payload().await?;
+    let t = save_snapshot(&payload);
+
+    audit::log(
+        Some(&claims),
+        Some(client_addr.ip().to_string().as_str()),
+        "env_refresh",
+        "system",
+        "手动刷新服务器运行环境快照",
+    )
+    .await;
+
+    Ok(Json(
+        json!({ "code": 0, "message": "运行环境已刷新", "data": build_env_data(Some(payload), t, true, None) }),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EnvDefaultsPayload {
+    /// 默认 Web 服务器 flavor：空=跟随探测（auto）
+    pub webserver: Option<String>,
+    /// 默认 PHP 版本（如 8.3 / php83），建站新增站点时的预选值
+    pub php_default: Option<String>,
+    /// 默认数据库实例（如 mysql / mariadb）
+    pub database: Option<String>,
+    /// 默认 Python 版本（如 3.12）：应用部署未指定版本时用它（uv 管理）
+    pub python_default: Option<String>,
+    /// 默认 Node 版本（如 20）：应用部署未指定版本时用它（fnm 管理）
+    pub node_default: Option<String>,
+    /// 下载镜像：official（默认，直连官方源）/ china（走国内镜像）
+    pub download_mirror: Option<String>,
+    /// PHP-FPM 默认 pool 规格（JSON 字符串）
+    pub fpm_pool_defaults: Option<String>,
+    /// 用户家目录默认挂载点（如 /home /home2），新用户创建时的 home_dir 前缀
+    pub user_home_root: Option<String>,
+    /// 容器运行时：auto（跟随探测，默认）/ docker / podman。
+    ///
+    /// 面板的容器操作全部走它；只有设为 podman 时，套餐的「容器能力」才对
+    /// 非管理员生效（Docker 下容器由 root 跑，没有隔离）。
+    pub container_runtime: Option<String>,
+}
+
+/// POST /system/env/defaults：保存全局默认配置（admin only）。
+pub async fn env_defaults_save(
+    claims: ValidatedClaims,
+    client_addr: Extension<SocketAddr>,
+    Json(payload): Json<EnvDefaultsPayload>,
+) -> ZapJsonResult {
+    if !is_admin(&claims) {
+        return Err(ZapError::New(-1, "仅管理员可设置默认运行环境".to_string()));
+    }
+
+    let mut upserts: Vec<(String, String)> = Vec::new();
+    for (key, val) in [
+        ("webserver", payload.webserver),
+        ("php_default", payload.php_default),
+        ("python_default", payload.python_default),
+        ("node_default", payload.node_default),
+        ("download_mirror", payload.download_mirror),
+        ("database", payload.database),
+    ] {
+        if let Some(v) = val {
+            let v = v.trim().to_string();
+            if v.len() > 64 {
+                return Err(ZapError::New(-1, format!("默认{key}长度超限")));
+            }
+            upserts.push((key.to_string(), v));
+        }
+    }
+    if let Some(v) = payload.fpm_pool_defaults {
+        let v = v.trim().to_string();
+        if !v.is_empty() && serde_json::from_str::<Value>(&v).map_or(true, |x| !x.is_object()) {
+            return Err(ZapError::New(
+                -1,
+                "fpm_pool_defaults 必须是 JSON 对象".to_string(),
+            ));
+        }
+        upserts.push(("fpm_pool_defaults".to_string(), v));
+    }
+    if let Some(v) = payload.user_home_root {
+        let v = v.trim().trim_end_matches('/').to_string();
+        if v.is_empty()
+            || !v.starts_with('/')
+            || v.contains("..")
+            || v.contains(char::is_whitespace)
+            || v == "/"
+        {
+            return Err(ZapError::New(
+                -1,
+                "user_home_root 必须是合法挂载点绝对路径（如 /home 或 /home2）".to_string(),
+            ));
+        }
+        upserts.push(("user_home_root".to_string(), v));
+    }
+    if let Some(v) = payload.container_runtime {
+        let v = v.trim().to_lowercase();
+        if !matches!(v.as_str(), "auto" | "docker" | "podman") {
+            return Err(ZapError::New(
+                -1,
+                "容器运行时只支持 auto（跟随探测）/ docker / podman".to_string(),
+            ));
+        }
+        upserts.push(("container_runtime".to_string(), v));
+    }
+
+    server_env::conf_set_many(&upserts, "面板默认配置");
+
+    let conf = load_conf();
+    let detail = upserts
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    audit::log(
+        Some(&claims),
+        Some(client_addr.ip().to_string().as_str()),
+        "env_defaults_save",
+        "system",
+        &detail,
+    )
+    .await;
+
+    Ok(Json(
+        json!({ "code": 0, "message": "默认配置已保存", "data": conf_json(&conf) }),
+    ))
+}

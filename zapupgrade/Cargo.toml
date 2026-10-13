@@ -1,0 +1,20 @@
+[package]
+name = "zapupgrade"
+version.workspace = true
+license.workspace = true
+edition = "2024"
+description = "ZAP 系统升级器：校验/备份/原子替换/重启 zapd 与 zapexec（一次性进程，root 运行）"
+
+[[bin]]
+name = "zapupgrade"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+# 命令行模式（upgrade --to）自行下载发行包：与 zapd updater 用同一套依赖与用法
+ureq = "2.12"
+tar = "0.4"
+flate2 = "1.0"
+sha2 = "0.10"
+# 以 root 建目录后把属主还回数据区属主（zapadm），否则 zapd 写不进 stage/
+libc = "0.2"

@@ -1,0 +1,331 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<template>
+  <div class="docker-pane">
+    <div class="pane-toolbar">
+      <div class="pane-toolbar__left">
+        <el-input
+          v-model="keyword"
+          :prefix-icon="Search"
+          :placeholder="t('docker.common.search')"
+          clearable
+          :style="{ width: '240px' }"
+        />
+        <template v-if="selection.length">
+          <el-divider direction="vertical" />
+          <span class="pane-selected">{{
+            t('docker.common.selected', { n: selection.length })
+          }}</span>
+          <el-button size="small" type="danger" plain @click="bulkRemove">
+            {{ t('docker.common.remove') }}
+          </el-button>
+        </template>
+      </div>
+      <div class="pane-toolbar__right">
+        <el-button size="small" type="primary" :icon="Plus" @click="createVisible = true">
+          {{ t('docker.volume.create') }}
+        </el-button>
+        <el-button size="small" :icon="Delete" @click="prune">{{
+          t('docker.volume.prune')
+        }}</el-button>
+        <el-button size="small" :icon="Refresh" @click="emit('refresh')">{{
+          t('docker.refresh')
+        }}</el-button>
+      </div>
+    </div>
+
+    <el-table
+      v-loading="loading"
+      :data="filtered"
+      row-key="Name"
+      size="small"
+      @selection-change="(rows: DockerVolume[]) => (selection = rows)"
+    >
+      <el-table-column type="selection" width="42" />
+
+      <el-table-column :label="t('docker.volume.name')" min-width="200">
+        <template #default="{ row }">
+          <span class="cell-name mono">{{ row.Name }}</span>
+        </template>
+      </el-table-column>
+
+      <el-table-column :label="t('docker.common.driver')" width="120">
+        <template #default="{ row }">{{ row.Driver || '—' }}</template>
+      </el-table-column>
+
+      <el-table-column :label="t('docker.volume.dataDir')" min-width="300" show-overflow-tooltip>
+        <template #default="{ row }">
+          <span class="mono">{{ row.DataDir || row.Mountpoint || '—' }}</span>
+          <el-tooltip
+            v-if="isSystemDir(row)"
+            :content="t('docker.volume.systemDirTip')"
+            placement="top"
+          >
+            <el-tag size="small" type="info" class="dir-tag">{{
+              t('docker.volume.systemDir')
+            }}</el-tag>
+          </el-tooltip>
+        </template>
+      </el-table-column>
+
+      <el-table-column :label="t('docker.common.scope')" width="120">
+        <template #default="{ row }">{{ row.Scope || '—' }}</template>
+      </el-table-column>
+
+      <el-table-column :label="t('docker.common.actions')" width="120" fixed="right">
+        <template #default="{ row }">
+          <el-button link type="danger" @click="remove(row)">{{
+            t('docker.common.remove')
+          }}</el-button>
+        </template>
+      </el-table-column>
+
+      <template #empty>
+        <el-empty :description="t('docker.common.empty')" :image-size="60" />
+      </template>
+    </el-table>
+
+    <el-dialog v-model="createVisible" :title="t('docker.volume.createTitle')" width="560px">
+      <el-form label-position="top" size="default">
+        <el-form-item :label="t('docker.volume.name')">
+          <el-input
+            v-model="form.name"
+            :placeholder="t('docker.volume.namePlaceholder')"
+            @keyup.enter="doCreate"
+          />
+        </el-form-item>
+        <el-form-item :label="t('docker.volume.location')">
+          <el-radio-group v-model="form.location">
+            <el-radio value="home">{{ t('docker.volume.locationHome') }}</el-radio>
+            <el-radio value="default">{{ t('docker.volume.locationDefault') }}</el-radio>
+          </el-radio-group>
+          <div class="loc-preview mono">{{ previewDir }}</div>
+          <div class="loc-tip">
+            {{
+              form.location === 'home'
+                ? t('docker.volume.homeTip')
+                : t('docker.volume.defaultTip')
+            }}
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="createVisible = false">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" :loading="saving" @click="doCreate">{{
+          t('common.save')
+        }}</el-button>
+      </template>
+    </el-dialog>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Delete, Plus, Refresh, Search } from '@/icons'
+import { listVolumes, volumeAction, type DockerVolume } from '@/api/docker'
+import { getUserInfo } from '@/api/user'
+
+const props = defineProps<{ refreshToken: number }>()
+const emit = defineEmits<{ count: [number]; refresh: [] }>()
+
+const { t } = useI18n()
+
+const loading = ref(false)
+const rows = ref<DockerVolume[]>([])
+const selection = ref<DockerVolume[]>([])
+const keyword = ref('')
+
+const createVisible = ref(false)
+const saving = ref(false)
+const form = reactive({ name: '', location: 'home' as 'home' | 'default' })
+
+/** 当前账号的家目录：只在第一次打开弹窗时取一次，用于预览数据落点 */
+const homeDir = ref('')
+async function ensureHomeDir() {
+  if (homeDir.value) return
+  try {
+    const resp = await getUserInfo()
+    homeDir.value = (resp.data as any)?.home_dir || ''
+  } catch {
+    // 拿不到就只显示相对提示，不影响建卷
+  }
+}
+watch(createVisible, (v) => {
+  if (v) ensureHomeDir()
+})
+
+/** Docker 默认目录：卷数据落在那儿就不进配额、也不随 home 备份 */
+const SYSTEM_DIR_PREFIX = '/var/lib/docker/volumes'
+
+/** 落点预览：名称还没填时给出占位，让用户看懂两种选择的区别 */
+const previewDir = computed(() => {
+  const name = form.name.trim() || '<名称>'
+  if (form.location === 'default') return `${SYSTEM_DIR_PREFIX}/${name}/_data`
+  const home = homeDir.value.trim().replace(/\/+$/, '')
+  return home ? `${home}/volumes/${name}` : `~/volumes/${name}`
+})
+
+const filtered = computed(() => {
+  const kw = keyword.value.trim().toLowerCase()
+  if (!kw) return rows.value
+  return rows.value.filter((r) =>
+    `${r.Name} ${r.Driver} ${r.DataDir || r.Mountpoint}`.toLowerCase().includes(kw),
+  )
+})
+
+const isSystemDir = (row: DockerVolume) =>
+  (row.DataDir || row.Mountpoint || '').startsWith(SYSTEM_DIR_PREFIX)
+
+async function remove(row: DockerVolume) {
+  try {
+    await ElMessageBox.confirm(
+      t('docker.common.removeConfirm', { name: row.Name }),
+      t('docker.common.remove'),
+      { type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  try {
+    await volumeAction(row.Name, 'remove')
+    ElMessage.success(t('docker.common.deleted'))
+    await load()
+  } catch (e: any) {
+    ElMessage.error(e.message || t('docker.common.actionFailed'))
+  }
+}
+
+async function bulkRemove() {
+  if (!selection.value.length) {
+    ElMessage.warning(t('docker.common.noSelection'))
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      t('docker.common.bulkRemoveConfirm', { n: selection.value.length }),
+      t('docker.common.remove'),
+      { type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  let failed = 0
+  for (const row of selection.value) {
+    try {
+      await volumeAction(row.Name, 'remove')
+    } catch {
+      failed += 1
+    }
+  }
+  if (failed) ElMessage.warning(t('docker.common.partialFailed', { n: failed }))
+  else ElMessage.success(t('docker.common.deleted'))
+  selection.value = []
+  await load()
+}
+
+async function prune() {
+  try {
+    await ElMessageBox.confirm(t('docker.common.pruneConfirm'), t('docker.volume.prune'), {
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+  try {
+    await volumeAction('', 'prune')
+    ElMessage.success(t('docker.common.pruned'))
+    await load()
+  } catch (e: any) {
+    ElMessage.error(e.message || t('docker.common.actionFailed'))
+  }
+}
+
+async function doCreate() {
+  const name = form.name.trim()
+  if (!name) return
+  saving.value = true
+  try {
+    // 后端会回报数据真正落在哪个目录（bind 卷 = 账号 home，否则是 Docker 默认目录）
+    const resp = await volumeAction(name, 'create', form.location)
+    ElMessage.success(resp.data?.output || t('common.saveSuccess'))
+    form.name = ''
+    form.location = 'home'
+    createVisible.value = false
+    await load()
+  } catch (e: any) {
+    ElMessage.error(e.message || t('docker.common.actionFailed'))
+  } finally {
+    saving.value = false
+  }
+}
+
+async function load() {
+  loading.value = true
+  try {
+    const resp = await listVolumes()
+    rows.value = resp.data.items ?? []
+  } catch (e: any) {
+    ElMessage.error(e.message || t('docker.common.loadFailed'))
+  } finally {
+    loading.value = false
+  }
+}
+
+watch(() => props.refreshToken, load)
+watch(
+  () => rows.value.length,
+  (n) => emit('count', n),
+  { immediate: true },
+)
+onMounted(load)
+</script>
+
+<style scoped>
+.pane-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.pane-toolbar__left,
+.pane-toolbar__right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pane-selected {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.cell-name {
+  font-weight: 600;
+}
+
+.mono {
+  font-family: Menlo, Monaco, 'Courier New', monospace;
+  font-size: 12px;
+}
+
+.dir-tag {
+  margin-left: 6px;
+}
+
+.loc-preview {
+  margin-top: 6px;
+  color: var(--el-text-color-regular);
+}
+
+.loc-tip {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--el-text-color-secondary);
+}
+</style>

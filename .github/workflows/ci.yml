@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  rust:
+    name: Rust (fmt / clippy / test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # zapd 通过 rust-embed 内嵌 ../web/dist/，因此必须先构建前端产物，
+      # 再执行 fmt / clippy / build / test，否则 zapd 编译（含 clippy、测试）会失败。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Web install dependencies
+        run: npm ci || npm install
+        working-directory: web
+
+      - name: Web type check
+        run: npm run type-check
+        working-directory: web
+
+      - name: Web build (production)
+        run: npm run build:prod
+        working-directory: web
+
+      # zapd/zapexec 在编译期通过 include_str! 内嵌 data/appstore/repos/appstore 下的文件
+      # （如 zapexec 的 plugins/git/manifest.yaml），因此必须在 cargo 编译前把内置 AppStore
+      # 源 clone 到位。地址与分支同 build.sh / data/appstore/repos.yaml 保持一致。
+      - name: Clone builtin appstore repo
+        run: |
+          mkdir -p data/appstore/repos
+          rm -rf data/appstore/repos/appstore
+          git clone --depth 1 --branch main https://github.com/zapsh/appstore.git data/appstore/repos/appstore
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          components: rustfmt, clippy
+
+      # zapd 通过 #[cfg(feature = "commercial")] + #[path] 引入 gitignored 的
+      # 商业模块 zappro/src/mod.rs。该目录默认不在仓库内，但 rustfmt 解析模块树
+      # 时需要它存在，否则 cargo fmt --all 会整体失败。CI 里建一个空占位以便 fmt 通过
+      # （不影响非 commercial 构建，真正的商业源码 clone 后会覆盖它）。
+      - name: Create zappro stub (commercial module placeholder)
+        run: |
+          mkdir -p zappro/src
+          # 用 printf 而非 heredoc：heredoc 内容必须顶格，会破坏 YAML 块标量的缩进解析
+          printf '%s\n' \
+            '// Placeholder for the Zap Pro (commercial) module mount point.' \
+            '// Real source is cloned into zappro/ externally.' \
+            '// This stub only lets cargo fmt --all resolve zapd mod pro declaration.' \
+            > zappro/src/mod.rs
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy (warnings as errors)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build workspace
+        run: cargo build --workspace
+
+      - name: Run tests
+        run: cargo test --workspace
