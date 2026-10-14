@@ -419,12 +419,28 @@ download_urls_for() {
     esac
 }
 
+# 版本号合法性：数字开头、只含版本字符、必须带小数点。
+# latest.txt 被 CDN / 中间设备改成错误页时，返回的是一段 HTML 或二进制垃圾，
+# 不校验就会拿着它拼出乱码包名去下载。
+valid_version() {
+    case "$1" in
+        ""|*[!0-9A-Za-z.+-]*) return 1 ;;
+    esac
+    case "$1" in
+        *.*) case "$1" in
+                [0-9]*) return 0 ;;
+                *)      return 1 ;;
+            esac ;;
+        *) return 1 ;;
+    esac
+}
+
 # 查最新版本号：两条 latest.txt 都不通时，最后向 GitHub API 问 tag
 query_latest_version() {
     local url ver
     while IFS= read -r url; do
         [ -n "$url" ] || continue
-        if ver=$(fetch_url "${url}?t=$(date +%s)") && [ -n "$ver" ]; then
+        if ver=$(fetch_url "${url}?t=$(date +%s)") && valid_version "$ver"; then
             printf '%s' "$ver"
             return 0
         fi
@@ -436,7 +452,7 @@ query_latest_version() {
             | tr -d ' ' \
             | sed -n 's/.*"tag_name":"v\([0-9][^"]*\)".*/\1/p' \
             | head -1 ) || ver=""
-        if [ -n "$ver" ]; then
+        if [ -n "$ver" ] && valid_version "$ver"; then
             printf '%s' "$ver"
             return 0
         fi
