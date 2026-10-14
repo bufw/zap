@@ -54,10 +54,6 @@ if [ "$LANG_MODE" = "zh" ]; then
     L_EXTRACT_FAIL="解压失败，安装包可能已损坏"
     L_PKG_FORMAT="安装包格式不正确：缺少 zap/ 目录"
     L_PKG_CONTENT="安装包内容目录: %s"
-    L_OFFLINE_SKIP="离线模式：跳过 AppStore 仓库克隆，沿用发行包内置种子包"
-    L_INIT_APPSTORE="初始化 AppStore 官方仓库..."
-    L_APPSTORE_DONE="AppStore 官方仓库同步完成"
-    L_APPSTORE_FAIL="无法克隆 AppStore 仓库（网络不可达？），已保留内置种子包，可在面板中重试更新"
     L_WWW_MISSING="安装包未包含 data/www，面板「文档」菜单将不可用"
     L_DOC_DEPLOYED="文档已部署（%d 个 md → %s）"
     L_WWW_DOC_MISSING="安装包未包含文档 md，面板「文档」菜单将不可用"
@@ -134,10 +130,6 @@ else
     L_EXTRACT_FAIL="Extraction failed, the package may be corrupted"
     L_PKG_FORMAT="Invalid package layout: missing zap/ directory"
     L_PKG_CONTENT="Package content dir: %s"
-    L_OFFLINE_SKIP="Offline mode: skipping AppStore repo clone, using bundled seed package"
-    L_INIT_APPSTORE="Initializing AppStore official repo..."
-    L_APPSTORE_DONE="AppStore official repo synced"
-    L_APPSTORE_FAIL="Cannot clone AppStore repo (network unreachable?); kept bundled seed package, retry from panel later"
     L_WWW_MISSING="Package does not contain data/www; the panel 'Docs' menu will be unavailable"
     L_DOC_DEPLOYED="Documents deployed (%d md → %s)"
     L_WWW_DOC_MISSING="Package does not contain doc md; the panel 'Docs' menu will be unavailable"
@@ -198,8 +190,8 @@ usage() {
 
 离线安装（内网 / 无外网机器）：
   --pkg <路径>           使用**本地已有的**安装包，不联网下载（版本号从文件名解析）
-  --offline              全程不访问外网：不查 latest、不下载、不克隆 AppStore 仓库
-                         （AppStore 用发行包内置的种子包，面板里可随时重试更新）
+  --offline              全程不访问外网：不查 latest、不下载
+                         （AppStore 用发行包内置仓库，面板里可随时更新）
 
 初始管理员凭据（仅首次安装、全新数据库时生效）：
   --admin-user <name>    管理员用户名（默认 admin）
@@ -226,8 +218,8 @@ Usage: sudo bash install.sh [VERSION] [OPTIONS]
 
 Offline install (intranet / no internet):
   --pkg <path>           Use an existing local package, no download (version parsed from filename)
-  --offline              Fully offline: no latest check, no download, no AppStore clone
-                         (AppStore uses the bundled seed package; retry update from panel later)
+  --offline              Fully offline: no latest check, no download
+                         (AppStore uses the repo bundled in the package; update it from the panel later)
 
 Initial admin credentials (only on first install with a fresh DB):
   --admin-user <name>    Admin username (default: admin); also the Linux account, home at /home/<name>
@@ -518,8 +510,6 @@ SRC="$WORK_DIR/zap"
 [ -d "$SRC" ] || die "$L_PKG_FORMAT"
 info "$(printf "$L_PKG_CONTENT" "$SRC")"
 
-APPSTORE_REPO_URL="${APPSTORE_REPO_URL:-https://github.com/zapsh/appstore.git}"
-
 deploy_appstore() {
     local DEST="$ZAP_DIR/data/appstore"
     local BUILTIN="$DEST/repos/appstore"
@@ -531,27 +521,7 @@ deploy_appstore() {
 
     if [ ! -d "$BUILTIN/.git" ] && [ ! -d "$BUILTIN/database" ]; then
         mkdir -p "$BUILTIN"
-        for c in infra application webapps database library; do
-            [ -d "$SRC/data/appstore/repos/appstore/$c" ] && cp -Rf "$SRC/data/appstore/repos/appstore/$c" "$BUILTIN/" 2>/dev/null || true
-        done
-    fi
-
-    if [ "$OFFLINE" = "1" ]; then
-        info "$L_OFFLINE_SKIP"
-    elif [ ! -d "$BUILTIN/.git" ] && command -v git >/dev/null 2>&1; then
-        info "$L_INIT_APPSTORE"
-        if git clone -q --depth 1 "$APPSTORE_REPO_URL" "$DEST/repos/.tmp-appstore" 2>/dev/null; then
-            local has_seed
-            # 只看有没有条目（不用 find，避免依赖 GNU 扩展）
-            has_seed=$(ls -A "$BUILTIN" 2>/dev/null | head -1)
-            [ -n "$has_seed" ] && mv "$BUILTIN" "$DEST/repos/.seed-appstore" 2>/dev/null || true
-            mv "$DEST/repos/.tmp-appstore" "$BUILTIN"
-            rm -rf "$DEST/repos/.seed-appstore" 2>/dev/null || true
-            ok "$L_APPSTORE_DONE"
-        else
-            rm -rf "$DEST/repos/.tmp-appstore" 2>/dev/null || true
-            warn "$L_APPSTORE_FAIL"
-        fi
+        cp -Rf "$SRC/data/appstore/repos/appstore/." "$BUILTIN/" 2>/dev/null || true
     fi
     chmod -R 755 "$DEST" 2>/dev/null || true
 }
