@@ -795,14 +795,14 @@ export default {
     },
   },
 
-  /** 系统管理 · Zap 设置 → 通知设置（原「基础设置」的 Mail 迁到这里） */
+  /** 系统管理 · Zap 设置 → 通知设置 */
   mirrorCfg: {
     title: '下载源',
     subtitle: '应用商店取源码包（nginx / php / mysql 等）的地址，支持本地目录（离线环境）',
     pillHint: '应用商店源码包的下载地址 / 离线本地目录',
 
     hint:
-      '应用商店安装软件时从此处取源码包。国内机器用 mirrors.zap.cn，海外或国内源不通时用 Cloudflare mirrors.zap.sh；离线机房没有外网，可填一个本地目录（如 /opt/zap-pkg），按相同目录结构预先放好包即可。改动只对下一次安装生效，正在跑的任务不受影响。',
+      '应用商店安装软件时从此处下载源码包。国内服务器用 mirrors.zap.cn,海外Cloudflare mirrors.zap.sh; 离线机房没有外网，可填一个本地目录（如 /opt/zap-pkg），按相同目录结构预先放好包即可。改动只对下一次安装生效，正在跑的任务不受影响。',
     source: '下载源',
     sourceHint: '可从下拉选择内置镜像，也可直接输入：https://…/pkg 形式的镜像地址，或本地目录的绝对路径（离线环境）',
     current: '当前生效',
@@ -826,8 +826,8 @@ export default {
     provider: '发信渠道',
     providerSmtp: 'SMTP',
     providerSendgrid: 'SendGrid',
-    providerAliyun: '阿里云邮件推送',
-    providerTencent: '腾讯云 SES',
+    providerAliyun: 'Aliyun DirectMail',
+    providerTencent: 'TencentCloud SES',
     providerMailgun: 'Mailgun',
     region: '区域',
     regionPlaceholder: '如 cn-hangzhou / ap-guangzhou',
@@ -956,12 +956,12 @@ export default {
     tabFile: '配置文件',
 
     serverHint:
-      '面板仅以 HTTPS 对外提供服务（HTTP 会自动跳转）。修改绑定 IP 或端口后需重启 Zap 服务，请确认新端口未被占用且防火墙已放行。',
+      '面板仅支持 HTTPS , 修改绑定 IP 或端口后需重启 Zap 服务，请确认新端口未被占用且防火墙已放行。',
     bindIp: '绑定 IP',
     bindAll: '0.0.0.0（全部）',
     bindLocal: '127.0.0.1（仅本机）',
     bindAllV6: '::（全部 IPv6）',
-    bindIpHint: '0.0.0.0 表示监听全部网卡，也可填写服务器上的单个 IP',
+    bindIpHint: '0.0.0.0 表示监听全部IP，也可填写服务器上的单个 IP',
     listenPort: '监听端口',
     portHint: '默认 2663，访问地址形如 https://服务器IP:端口/',
     saveServer: '保存服务设置',
@@ -1790,7 +1790,7 @@ export default {
     sitesDir: '站点配置目录',
     running: '运行中',
     notRunning: '未运行',
-    noWebserver: '未检测到 Nginx / OpenResty',
+    noWebserver: '未检测到 Nginx',
 
     defaultTag: '默认 {v}',
     phpVersion: '版本',
@@ -1927,8 +1927,6 @@ export default {
     subtitle: '端口放行 / 拒绝、服务启停（自动适配 firewalld / ufw / nftables / iptables）',
     panelPortAlert:
       '面板监听端口 {port} 受保护：不能在该端口上添加拒绝规则，也不能删除它的放行规则，避免把自己锁在外面。',
-    wslAlert:
-      '检测到 WSL 环境：使用共享内核，iptables / nftables 规则可能不生效或仅当前会话有效，请以实际宿主机防火墙为准。',
     backend: '后端',
     notDetected: '未检测到',
     installedOnly: '（仅检测到命令，当前未生效）',

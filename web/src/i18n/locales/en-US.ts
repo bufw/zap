@@ -1930,8 +1930,6 @@ const enUS: Messages = {
       'Allow / deny ports and control the service (auto-adapts to firewalld / ufw / nftables / iptables)',
     panelPortAlert:
       'Panel port {port} is protected: you cannot add a deny rule on it or delete its allow rule, so you never lock yourself out.',
-    wslAlert:
-      'WSL detected: it shares the host kernel, so iptables / nftables rules may not apply or may only last for the current session. Refer to the actual host firewall.',
     backend: 'Backend',
     notDetected: 'Not detected',
     installedOnly: '(command found, but not currently in effect)',
