@@ -395,7 +395,7 @@ fn iptables_rules() -> Vec<Rule> {
 
 /// nft 规则集是否真的有内容（仅用于展示与排障，不作为后端判定依据）。
 /// 注意：`nft list ruleset` 在空规则集时也返回 0（输出为空），
-/// 只看退出码会把「装了 nft 但没用」误判成 nftables 生效（WSL 上尤其常见）。
+/// 只看退出码会把「装了 nft 但没用」误判成 nftables 生效。
 fn nft_has_ruleset() -> bool {
     !cmd_out("nft", &["list", "ruleset"]).trim().is_empty()
 }
@@ -420,26 +420,15 @@ fn iptables_has_rules() -> bool {
         .any(|l| l.trim_start().starts_with("-A") || l.trim_start().starts_with("-I"))
 }
 
-/// WSL：使用共享内核，iptables / nft 规则可能不生效或仅当前会话有效，需要显式提示。
-fn is_wsl() -> bool {
-    std::fs::read_to_string("/proc/version")
-        .map(|s| {
-            let s = s.to_lowercase();
-            s.contains("microsoft") || s.contains("wsl")
-        })
-        .unwrap_or(false)
-}
-
 /// 后端是否真正在生效。
 /// 注意不能只看 systemd：ufw.service 在 Debian/Ubuntu 上是
 /// `Type=oneshot + RemainAfterExit`，ufw 实际关闭时 systemd 仍显示 active，
 /// 必须以各后端自己的查询命令为准。
-/// nftables 是否真正在管理防火墙，需同时满足三个条件：
+/// nftables 是否真正在管理防火墙：
 ///
 /// 1. 服务 active 且 enabled（开机自启）——它是 oneshot 加载型服务，
 ///    单纯 `active`（RemainAfterExit）不代表在管防火墙；
-/// 2. 规则集里确实有规则（空规则集 = 装了没用，WSL / 桌面发行版很常见）；
-/// 3. `nft list ruleset` 有内容本身也不能作数（iptables-nft、Docker、libvirt 都会写表）。
+/// 2. `nft list ruleset` 有内容本身也不能作数（iptables-nft、Docker、libvirt 都会写表）。
 fn backend_active(b: Backend) -> bool {
     match b {
         Backend::Firewalld => cmd_out("firewall-cmd", &["--state"]).trim() == "running",
@@ -1741,7 +1730,6 @@ fn validate_blacklist_ip(ip: &str) -> Result<(), String> {
 
 pub async fn status(panel_port: u16) -> Response {
     let (b, via) = detect_kind();
-    let wsl = is_wsl();
     if b == Backend::Unsupported {
         return Response::ok(
             "未检测到受支持的防火墙（firewalld / ufw / nftables / iptables）",
@@ -1750,7 +1738,6 @@ pub async fn status(panel_port: u16) -> Response {
             "detected": "none",
             "active": false,
             "enabled": false,
-            "wsl": wsl,
             "panel_port": panel_port,
             "rules": [],
             "forwards": [],
@@ -1789,7 +1776,6 @@ pub async fn status(panel_port: u16) -> Response {
             "detected": via,
             "active": active,
             "enabled": enabled,
-            "wsl": wsl,
             "diag": diag(),
             "panel_port": panel_port,
             "rules": rules,
