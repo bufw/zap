@@ -20,15 +20,6 @@
         style="margin-bottom: 16px"
       />
 
-      <el-alert
-        v-if="status.wsl"
-        type="warning"
-        :closable="false"
-        show-icon
-        :title="t('serverFirewall.wslAlert')"
-        style="margin-bottom: 12px"
-      />
-
       <el-descriptions :column="3" border size="small" style="max-width: 760px">
         <el-descriptions-item :label="t('serverFirewall.backend')">
           <el-tag v-if="status.backend === 'none'" size="small" type="info">
@@ -898,7 +889,6 @@ const status = reactive<FirewallStatus>({
   detected: 'none',
   active: false,
   enabled: false,
-  wsl: false,
   panel_port: 0,
   rules: [],
   forwards: [],
@@ -1147,7 +1137,6 @@ async function load() {
     const d = res.data || ({} as Partial<FirewallStatus>)
     status.backend = d.backend || 'none'
     status.detected = d.detected || 'none'
-    status.wsl = !!d.wsl
     status.active = !!d.active
     status.enabled = !!d.enabled
     status.panel_port = d.panel_port || 0

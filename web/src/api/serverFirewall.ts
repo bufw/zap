@@ -31,8 +31,6 @@ export interface FirewallStatus {
   detected: 'running' | 'installed' | 'none'
   active: boolean
   enabled: boolean
-  /** WSL 环境：共享内核，规则可能不生效 */
-  wsl: boolean
   panel_port: number
   rules: FirewallRule[]
   /** 端口转发规则（DNAT） */

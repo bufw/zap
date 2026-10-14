@@ -114,8 +114,6 @@ fn is_network_failure(text: &str) -> bool {
 /// 进程里存在 HTTP(S)_PROXY 时的提醒。
 ///
 /// reqwest 默认会读这些环境变量，代理不通就表现成 `error sending request`。
-/// WSL 里从 Windows 继承来的 `127.0.0.1:1080` 代理是典型死因：WSL2 里那个地址
-/// 指向 Linux 自己，代理软件其实跑在 Windows 侧，连接必然被拒。
 fn proxy_hint() -> String {
     for name in [
         "HTTPS_PROXY",
