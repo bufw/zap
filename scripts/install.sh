@@ -30,8 +30,7 @@ LANG_MODE="$(detect_lang)"
 if [ "$LANG_MODE" = "zh" ]; then
     L_MUST_ROOT="请以 root 身份运行: sudo bash $0"
     L_FIND_BASH_FAIL="未找到 bash：请先安装后重试"
-    L_EDITION="发行版: %s"
-    L_TARGET="目标版本: %s   发行版: %s   系统: %s (systemd)   架构: %s"
+    L_TARGET="目标版本: %s   系统: %s (systemd)   架构: %s"
     L_NO_BASH="未找到 bash：AppStore 安装脚本与计划任务将无法执行，请先安装 bash"
     L_QUERY_LATEST="查询最新版本..."
     L_LATEST_VER="最新版本: %s"
@@ -51,7 +50,7 @@ if [ "$LANG_MODE" = "zh" ]; then
     L_PKG_REQUIRED="--pkg 缺少安装包路径"
     L_ADMIN_USER_REQUIRED="--admin-user 缺少用户名"
     L_ADMIN_PASS_REQUIRED="--admin-pass 缺少密码"
-    L_PKG_NAME_BAD="包名不是 zap-v<版本>[-pro]-%s-%s.tar.gz，按 %s 继续（仅影响完成页显示）"
+    L_PKG_NAME_BAD="包名不是 zap-v<版本>-%s-%s.tar.gz，按 %s 继续（仅影响完成页显示）"
     L_DECOMP="解压安装包..."
     L_TMP_FAIL="无法创建临时目录"
     L_EXTRACT_FAIL="解压失败，安装包可能已损坏"
@@ -109,8 +108,7 @@ if [ "$LANG_MODE" = "zh" ]; then
 else
     L_MUST_ROOT="Please run as root: sudo bash $0"
     L_FIND_BASH_FAIL="bash not found: please install it and retry"
-    L_EDITION="Edition: %s"
-    L_TARGET="Target version: %s   Edition: %s   OS: %s (systemd)   Arch: %s"
+    L_TARGET="Target version: %s   OS: %s (systemd)   Arch: %s"
     L_NO_BASH="bash not found: AppStore install scripts and cron jobs will fail; please install bash"
     L_QUERY_LATEST="Querying latest version..."
     L_LATEST_VER="Latest version: %s"
@@ -130,7 +128,7 @@ else
     L_PKG_REQUIRED="--pkg requires package path"
     L_ADMIN_USER_REQUIRED="--admin-user requires username"
     L_ADMIN_PASS_REQUIRED="--admin-pass requires password"
-    L_PKG_NAME_BAD="Package name is not zap-v<version>[-pro]-%s-%s.tar.gz, continuing with %s (affects completion page only)"
+    L_PKG_NAME_BAD="Package name is not zap-v<version>-%s-%s.tar.gz, continuing with %s (affects completion page only)"
     L_DECOMP="Extracting package..."
     L_TMP_FAIL="Cannot create temp directory"
     L_EXTRACT_FAIL="Extraction failed, the package may be corrupted"
@@ -350,10 +348,6 @@ case "$ADMIN_PASS" in
 esac
 [ "${#ADMIN_PASS}" -ge 8 ] || warn "$L_PASS_SHORT"
 
-EDITION="${EDITION:-Zap Community}"
-EDITION_ID="${EDITION_ID:-community}"
-PRO_SUFFIX="${PRO_SUFFIX:-}"
-info "$(printf "$L_EDITION" "$EDITION")"
 
 OS=$(uname -s)
 case "$OS" in
@@ -375,7 +369,7 @@ case "$ARCH" in
     s390x)               ;;
     *) die "$(printf "$L_ARCH_UNSUPPORTED" "$ARCH")" ;;
 esac
-info "$(printf "$L_TARGET" "$VERSION" "$EDITION" "$OS" "$ARCH")"
+info "$(printf "$L_TARGET" "$VERSION" "$OS" "$ARCH")"
 
 HAVE_FETCH=0
 if command -v wget >/dev/null 2>&1; then
@@ -468,16 +462,16 @@ if [ "$VERSION" = "latest" ] && [ "$NEED_DOWNLOAD" = "1" ]; then
     fi
 fi
 
-ZAP_FILENAME="zap-v${VERSION}${PRO_SUFFIX}-${OS_PKG}-${ARCH}.tar.gz"
+ZAP_FILENAME="zap-v${VERSION}-${OS_PKG}-${ARCH}.tar.gz"
 
 # ── 取包：本地指定 > 当前目录已存在 > 下载 ────────────────────
 DOWNLOADED=0
 if [ -n "$LOCAL_PKG" ]; then
     [ -f "$LOCAL_PKG" ] || die "$(printf "$L_PKG_NOT_EXIST" "$LOCAL_PKG")"
     [ -s "$LOCAL_PKG" ] || die "$(printf "$L_PKG_EMPTY" "$LOCAL_PKG")"
-    # 版本号从文件名解析（zap-v<版本>[-pro]-<os>-<arch>.tar.gz），装完的总结页要用
+    # 版本号从文件名解析（zap-v<版本>-<os>-<arch>.tar.gz），装完的总结页要用
     local_base=$(basename "$LOCAL_PKG")
-    if [[ "$local_base" =~ ^zap-v(.+)(-pro)?-${OS_PKG}-${ARCH}\.tar\.gz$ ]]; then
+    if [[ "$local_base" =~ ^zap-v(.+)-${OS_PKG}-${ARCH}\.tar\.gz$ ]]; then
         VERSION="${BASH_REMATCH[1]}"
     else
         warn "$(printf "$L_PKG_NAME_BAD" "$OS_PKG" "$ARCH" "$VERSION")"
@@ -795,10 +789,9 @@ printf "${GREEN}========================================${NC}\n"
 printf "${GREEN}           ZAP Installation Complete${NC}\n"
 printf "${GREEN}========================================${NC}\n"
 echo "  Version:      ${VERSION}"
-echo "  Edition:      ${EDITION}"
 echo "  Program Directory:  /usr/local/zap"
 echo "  Configuration Directory:  /etc/zap"
-echo "  Access URL:  https://<Server IP>:2600"
+echo "  Access URL:  https://<Server IP>:2663"
 if [ "$ADMIN_UNCHANGED" = "1" ]; then
     echo "  Admin User:      ${ADMIN_USER}(Existing, Password Unchanged)"
     echo "  Home Directory:  /home/${ADMIN_USER}"
@@ -819,13 +812,11 @@ else
 fi
 if [ "$OFFLINE" = "1" ]; then
     printf "${YELLOW}  ${L_WARN_OFFLINE}${NC}\n"
-    printf "     sudo bash upgrade-offline.sh --pkg ./zap-v<版本>${PRO_SUFFIX}-linux-${ARCH}.tar.gz\n"
+    printf "     sudo bash upgrade-offline.sh --pkg ./zap-v<VERSION>-linux-${ARCH}.tar.gz\n"
     printf "     ${L_OFFLINE_UPGRADE_NOTE}\n"
     printf "\n"
 else
-    UPGRADE_HINT="zapupgrade upgrade --to latest"
-    [ "$PRO" = "1" ] && UPGRADE_HINT="${UPGRADE_HINT} --pro"
-    printf "  后续升级:  ${UPGRADE_HINT}（回滚: zapupgrade rollback --list）\n"
+    printf "  Upgrade:  zapupgrade upgrade --to latest (rollback: zapupgrade rollback --list)\n"
 fi
 }
 
