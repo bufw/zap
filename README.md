@@ -11,7 +11,7 @@ A lightweight, high-performance Linux server control panel written in Rust.
 [![Version](https://img.shields.io/badge/version-1.3.11-blue)](https://github.com/zapsh/zap)
 [![Platform](https://img.shields.io/badge/platform-Linux%20amd64%20%7C%20arm64-lightgrey?logo=linux)](https://www.kernel.org)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-green)](./LICENSE)
-
+![CI](https://github.com/zapsh/zap/actions/workflows/ci.yml/badge.svg)
 </div>
 
 ---
