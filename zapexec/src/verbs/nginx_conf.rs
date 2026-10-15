@@ -248,7 +248,7 @@ pub fn render(spec: &NginxGlobalSpec, ctx: &RenderCtx) -> String {
 }
 
 fn emit_http_body(o: &mut String, h: &NginxHttpSpec, i: &str) {
-    //  Basic / Performance 
+    //  Basic / Performance
     let b = &h.basic;
     o.push_str("\n    # ── Basic / Performance ──\n");
     push_val(o, i, "default_type", &b.default_type);
