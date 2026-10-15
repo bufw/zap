@@ -115,9 +115,6 @@ pub struct NginxHttpSpec {
     /// 第三方 ngx cache purge 模块的清理白名单（渲染为 http 级 map）
     #[serde(default)]
     pub cache_purge: NginxCachePurgeSpec,
-    /// ModSecurity 等安全指令（需已加载对应模块）
-    #[serde(default)]
-    pub security: NginxSecuritySpec,
     /// 高级：http{} 末尾追加的原样指令（同步前仍会被 `nginx -t` 把关）
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub custom_raw: String,
@@ -167,6 +164,8 @@ pub struct NginxHttpBasicSpec {
     pub variables_hash_max_size: Option<u32>,
     #[serde(default)]
     pub lingering_close: Option<String>,
+    #[serde(default)]
+    pub charset: Option<String>,
 }
 
 /// Gzip 压缩（Brotli 由第三方模块提供，不在内置模板里）。
@@ -253,6 +252,12 @@ pub struct NginxLogSpec {
 
 /// 默认 log_format（Nginx 官方 main / combined）。
 pub const NGINX_LOG_FORMAT_MAIN: &str = "'$remote_addr - $remote_user [$time_local] \"$request\" $status $body_bytes_sent \"$http_referer\" \"$http_user_agent\" \"$http_x_forwarded_for\"'";
+
+/// 默认 JSON log_format（站点与全局 access_log 均默认使用）。
+///
+/// 渲染为 `log_format json_combined escape=json '...';`，字段与 nginx combined 日志一一对应，
+/// 便于日志分析与带宽统计直接解析。
+pub const NGINX_LOG_FORMAT_JSON: &str = r#"'{"time_local":"$time_local","remote_addr":"$remote_addr","x_forwarded_for":"$http_x_forwarded_for","remote_user":"$remote_user","request":"$request","status":"$status","body_bytes_sent":"$body_bytes_sent","request_time":"$request_time","http_referrer":"$http_referer","http_user_agent":"$http_user_agent"}'"#;
 
 /// 反代默认参数（可被站点 location 级覆盖）。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -351,17 +356,6 @@ pub struct NginxCachePurgeSpec {
     /// map 中命中时的变量名前缀（默认 zap_purge）
     #[serde(default)]
     pub var_prefix: Option<String>,
-}
-
-/// ModSecurity 等 http 级安全指令（需已 `load_module` 对应模块）。
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct NginxSecuritySpec {
-    #[serde(default)]
-    pub modsecurity: Option<bool>,
-    #[serde(default)]
-    pub modsecurity_rules_file: Option<String>,
-    #[serde(default)]
-    pub add_header_csp: Option<String>,
 }
 
 /// 日志归档默认保留天数（site.log_rotate）

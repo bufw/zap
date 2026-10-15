@@ -408,7 +408,8 @@ export default {
     // 套餐
     ownerSystem: '系统直属',
     maxUsers: '最大用户数',
-    maxUsersTip: '该账户名下可创建的客户 / 成员上限，0 表示不限。仅对可建子账号的账户（经销商）有意义，普通客户保持 0 即可。',
+    maxUsersTip:
+      '该账户名下可创建的客户 / 成员上限，0 表示不限。仅对可建子账号的账户（经销商）有意义，普通客户保持 0 即可。',
     packageNone: '不绑定套餐',
     packageNoneOption: '不绑定套餐（不受套餐限制）',
     packageTipNone: '不绑定套餐：该客户不受套餐限制（磁盘、站点数、SSH 均不拦截）。',
@@ -473,7 +474,8 @@ export default {
     // 代登录（一键登录客户面板）
     sudoLogin: '一键登录',
     sudoLoginTitle: '一键登录客户面板',
-    sudoConfirm: '确定要以「{name}」的身份登录其面板吗？登录后你将拥有该客户的同等权限，所有操作都会被审计记录。',
+    sudoConfirm:
+      '确定要以「{name}」的身份登录其面板吗？登录后你将拥有该客户的同等权限，所有操作都会被审计记录。',
     sudoConfirmBtn: '确定登录',
 
     // 编辑抽屉：分区与列表筛选
@@ -500,7 +502,8 @@ export default {
     setStatus: '设置状态',
     statusSetTitle: '设置账号状态',
     statusSetConfirm: '确定将「{name}」的状态改为「{label}」？',
-    statusHint: '禁用 / 封禁 / 欠费停用后，该账号将无法登录，且已登录的会话会被强制下线；「暂停」例外：仍可登录，但名下网站与服务会被停止，暂停期间禁止启动，恢复为正常后自动拉起',
+    statusHint:
+      '禁用 / 封禁 / 欠费停用后，该账号将无法登录，且已登录的会话会被强制下线；「暂停」例外：仍可登录，但名下网站与服务会被停止，暂停期间禁止启动，恢复为正常后自动拉起',
     statusUpdated: '状态已更新',
   },
 
@@ -652,7 +655,8 @@ export default {
     scope: '归属',
     scopeGlobalOpt: '全局（仅管理员可见）',
     scopeSelfOpt: '私有（仅自己可见）',
-    scopeHint: '全局套餐仅管理员可见；私有套餐仅你自己可见。reseller 仅能创建并管理自己名下的私有套餐，无法看到管理员创建的套餐',
+    scopeHint:
+      '全局套餐仅管理员可见；私有套餐仅你自己可见。reseller 仅能创建并管理自己名下的私有套餐，无法看到管理员创建的套餐',
 
     diskQuota: '磁盘配额',
     maxSites: '站点数',
@@ -689,7 +693,8 @@ export default {
     proxyHint: '开启后该套餐客户可创建 / 编辑反向代理站点（upstream / location）',
     phpHint: '关闭后该套餐客户不能新建 PHP 站点，已有的 PHP 站点也不能再改',
     waf: 'WAF',
-    wafHint: '允许该套餐的客户为站点开启 WAF 防护 / 请求限速 / 并发限制（仍需全局 ModSecurity 已启用）',
+    wafHint:
+      '允许该套餐的客户为站点开启 WAF 防护 / 请求限速 / 并发限制（仍需全局 ModSecurity 已启用）',
     // 风险提示：容器 ≈ 宿主机 root，只有 Podman 环境才真正对客户生效
     apps: '应用管理',
     appsHint: '允许在站点里部署 python / nodejs 应用（以站点用户身份运行）',
@@ -745,7 +750,8 @@ export default {
     applyDone: '换源完成',
     noChanges: '没有可应用的改动',
     switchHint: '换源会自动备份原文件到 data/backups/osrepo，随时可在「备份与还原」中恢复。',
-    cacheConfirm: '将执行 apt-get update / dnf makecache 更新软件源索引，可能需要数十秒，确定继续？',
+    cacheConfirm:
+      '将执行 apt-get update / dnf makecache 更新软件源索引，可能需要数十秒，确定继续？',
     cacheDone: '缓存已更新（{manager}）',
     presetTitle: '一键添加第三方源',
     installedTitle: '已添加的第三方源',
@@ -801,10 +807,10 @@ export default {
     subtitle: '应用商店取源码包（nginx / php / mysql 等）的地址，支持本地目录（离线环境）',
     pillHint: '应用商店源码包的下载地址 / 离线本地目录',
 
-    hint:
-      '应用商店安装软件时从此处下载源码包。国内服务器用 mirrors.zap.cn,海外Cloudflare mirrors.zap.sh; 离线机房没有外网，可填一个本地目录（如 /opt/zap-pkg），按相同目录结构预先放好包即可。改动只对下一次安装生效，正在跑的任务不受影响。',
+    hint: '应用商店安装软件时从此处下载源码包。国内服务器用 mirrors.zap.cn,海外Cloudflare mirrors.zap.sh; 离线机房没有外网，可填一个本地目录（如 /opt/zap-pkg），按相同目录结构预先放好包即可。改动只对下一次安装生效，正在跑的任务不受影响。',
     source: '下载源',
-    sourceHint: '可从下拉选择内置镜像，也可直接输入：https://…/pkg 形式的镜像地址，或本地目录的绝对路径（离线环境）',
+    sourceHint:
+      '可从下拉选择内置镜像，也可直接输入：https://…/pkg 形式的镜像地址，或本地目录的绝对路径（离线环境）',
     current: '当前生效',
     remote: '远端镜像',
     local: '本地目录（离线）',
@@ -813,7 +819,8 @@ export default {
     saved: '下载源已保存',
     empty: '下载源不能为空',
     badFormat: '格式不合法：需为 http(s):// 开头的镜像地址，或 / 开头的本地目录绝对路径',
-    localPending: '本地目录源：保存时会在面板所在机器上校验该目录是否存在，需按镜像结构预放源码包（如 /opt/zap-pkg/php/php-8.3.6.tar.gz）',
+    localPending:
+      '本地目录源：保存时会在面板所在机器上校验该目录是否存在，需按镜像结构预放源码包（如 /opt/zap-pkg/php/php-8.3.6.tar.gz）',
     saveFailed: '保存失败，请检查下载源是否合法',
   },
 
@@ -840,7 +847,8 @@ export default {
     mailgunRegion: '数据中心',
     templateIdLabel: '模板 ID',
     templateIdPlaceholder: '填写后走模板发送（腾讯云 / Mailgun），留空则自由正文',
-    templateIdHint: '模板 ID 用于腾讯云 SES / Mailgun 的模板发送；阿里云走自由正文。发送时会把本事件的变量（如 username、time、ip）一并透传给模板。',
+    templateIdHint:
+      '模板 ID 用于腾讯云 SES / Mailgun 的模板发送；阿里云走自由正文。发送时会把本事件的变量（如 username、time、ip）一并透传给模板。',
     sgApiKey: 'API Key',
     sgApiKeyPlaceholder: 'SendGrid API Key',
     aliyunAccessKey: 'AccessKeyId',
@@ -850,7 +858,8 @@ export default {
     secretKeepHint: '留空=沿用已保存的密钥（{hint}）',
 
     templatesTitle: '通知模板',
-    templatesHint: '自定义各通知事件的邮件主题与正文，支持变量占位符。管理员编辑「全局」模板（影响所有用户），经销商编辑「私有」模板（仅影响其名下用户）。',
+    templatesHint:
+      '自定义各通知事件的邮件主题与正文，支持变量占位符。管理员编辑「全局」模板（影响所有用户），经销商编辑「私有」模板（仅影响其名下用户）。',
     templateScopeGlobal: '作用域：全局（所有用户）',
     templateScopeSelf: '作用域：私有（仅我的名下用户）',
     templateSubjectLabel: '主题',
@@ -1070,12 +1079,14 @@ export default {
     cacheConfirm: '将清理选中的 {n} 类缓存，该操作不可撤销，确认继续？',
     cacheCleanCancel: '取消',
     cacheDone: '已清理 {removed} 个条目，释放 {freed} 空间（{skipped} 个运行中任务已跳过）',
-    cacheDonePartial: '已清理 {removed} 个条目，释放 {freed} 空间（{skipped} 个运行中任务已跳过，{failed} 个删除失败，请检查权限或重试）',
+    cacheDonePartial:
+      '已清理 {removed} 个条目，释放 {freed} 空间（{skipped} 个运行中任务已跳过，{failed} 个删除失败，请检查权限或重试）',
 
     // 安全检测（Zap 运行环境权限与配置安全）
     secTitle: '安全检测',
     secSubtitle: '检测 Zap 运行环境的权限与配置安全',
-    secHint: '检查面板运行身份、关键目录与文件的权限，以及特权执行器(zapexec)的可用性；后续将扩展用户环境、家目录权限等检测。',
+    secHint:
+      '检查面板运行身份、关键目录与文件的权限，以及特权执行器(zapexec)的可用性；后续将扩展用户环境、家目录权限等检测。',
     secRescan: '重新检测',
     secEmpty: '暂无可展示的检测项',
     secCatZap: 'Zap 运行环境',
@@ -1089,18 +1100,22 @@ export default {
     secSuggest: '建议',
 
     secRuntimeUser: '运行身份',
-    secRuntimeUserRoot: 'Zap 以 root 身份运行（uid={uid}），一旦面板被攻破将直接获得整台主机的最高权限，存在严重提权风险。',
-    secRuntimeUserRootSug: '创建专用低权限系统账号（如 zapadm）运行面板进程，仅保留 zapexec 以 root 运行以完成脚本降权执行。',
+    secRuntimeUserRoot:
+      'Zap 以 root 身份运行（uid={uid}），一旦面板被攻破将直接获得整台主机的最高权限，存在严重提权风险。',
+    secRuntimeUserRootSug:
+      '创建专用低权限系统账号（如 zapadm）运行面板进程，仅保留 zapexec 以 root 运行以完成脚本降权执行。',
     secRuntimeUserOk: 'Zap 以 {name}(uid={uid}) 身份运行，未使用 root，符合最小权限原则。',
 
     secDataWritable: '数据目录可写',
     secDataWritableOk: '数据目录 {path} 可写，面板可正常保存配置与落盘数据。',
-    secDataWritableFail: '数据目录 {path} 不可写（运行身份 uid={uid} 权限不足），面板可能无法保存配置或写入数据。',
+    secDataWritableFail:
+      '数据目录 {path} 不可写（运行身份 uid={uid} 权限不足），面板可能无法保存配置或写入数据。',
     secDataWritableSug: '检查目录属主与权限，确保运行身份（uid={uid}）对数据目录具备写权限。',
 
     secConfigPerms: '配置文件权限',
     secConfigPermsOk: '配置文件 {path} 权限为 {mode}，未被其他用户读取。',
-    secConfigPermsWorldRead: '配置文件 {path} 权限为 {mode}，其他用户可读；文件内含 JWT 密钥，存在泄露风险。',
+    secConfigPermsWorldRead:
+      '配置文件 {path} 权限为 {mode}，其他用户可读；文件内含 JWT 密钥，存在泄露风险。',
     secConfigPermsWorldWrite: '配置文件 {path} 权限为 {mode}，其他用户可改写，存在被篡改风险。',
     secConfigPermsMissing: '配置文件 {path} 不存在（使用内置默认值）。',
     secConfigPermsSug: '将配置文件权限设为 640（仅属主读写、zap 组可读），并确认属主为运行身份。',
@@ -1119,8 +1134,10 @@ export default {
 
     secZapexec: '特权执行器',
     secZapexecOk: '特权执行器 zapexec 的 IPC 套接字 {path} 存在，软件安装与脚本降权执行可用。',
-    secZapexecFail: '未找到 zapexec 的 IPC 套接字 {path}，特权操作（软件安装、脚本降权执行）将不可用。',
-    secZapexecSug: '确认 zapexec 已安装并运行，且 zap.yaml 中 exec.socket_path 与执行器套接字路径一致。',
+    secZapexecFail:
+      '未找到 zapexec 的 IPC 套接字 {path}，特权操作（软件安装、脚本降权执行）将不可用。',
+    secZapexecSug:
+      '确认 zapexec 已安装并运行，且 zap.yaml 中 exec.socket_path 与执行器套接字路径一致。',
   },
 
   /** 系统管理 · 系统更新 */
@@ -1255,7 +1272,8 @@ export default {
     extractDialog: {
       title: '解压压缩包',
       source: '压缩包',
-      sourceHint: '仅支持 zip / tar / tar.gz / tgz / tar.bz2 / tar.xz / 7z / gz（tar.bz2 / tar.xz / 7z 需系统安装对应解压程序）',
+      sourceHint:
+        '仅支持 zip / tar / tar.gz / tgz / tar.bz2 / tar.xz / 7z / gz（tar.bz2 / tar.xz / 7z 需系统安装对应解压程序）',
       destMode: '解压位置',
       here: '当前目录（与压缩包同目录）',
       newFolder: '新建同名文件夹',
@@ -1265,7 +1283,8 @@ export default {
       target: '目标路径',
       pickDir: '选择目录',
       start: '解压',
-      unsupported: '不支持的压缩格式（仅支持 zip / tar / tar.gz / tgz / tar.bz2 / tar.xz / 7z / gz）',
+      unsupported:
+        '不支持的压缩格式（仅支持 zip / tar / tar.gz / tgz / tar.bz2 / tar.xz / 7z / gz）',
     },
     rename: '重命名',
     perm: '权限',
@@ -1851,7 +1870,8 @@ export default {
     addDirective: '添加指令',
     phpAdminValueHelp:
       '形如 disable_functions、error_log 的 PHP ini 指令；值里可用 {home} 指代用户家目录、{user} 指代 Linux 账号（渲染时替换）。默认已含 session.save_path / upload_tmp_dir（= {home}/tmp）、高危函数禁用 disable_functions；全局默认 error_log 在 /var/log/zap/php/{user}-error.log，新建规格模板默认 {home}/logs/php-error.log。',
-    phpAdminFlagHelp: '布尔型指令（开 / 关），如 log_errors、display_startup_errors；默认已含 log_errors = on、display_startup_errors = off。',
+    phpAdminFlagHelp:
+      '布尔型指令（开 / 关），如 log_errors、display_startup_errors；默认已含 log_errors = on、display_startup_errors = off。',
 
     defaultsTitle: '全局默认配置',
     defaultsSaved: '默认配置已保存',
@@ -1973,8 +1993,7 @@ export default {
     forwardAdded: '转发规则已添加',
     forwardDeleted: '转发规则已删除',
     deleteForwardConfirm: '确认删除转发规则 {label}？',
-    forwardUnsupported:
-      '当前后端（{backend}）不支持端口转发，需 nftables / iptables / firewalld。',
+    forwardUnsupported: '当前后端（{backend}）不支持端口转发，需 nftables / iptables / firewalld。',
     ipForwardAlert:
       '内核 IPv4 转发未开启，转发规则暂不生效；添加转发规则时面板会自动开启（net.ipv4.ip_forward=1）。',
     blacklistTab: 'IP 黑名单',
@@ -2042,7 +2061,8 @@ export default {
     banLastSeen: '最近失败',
     banIgnoredTitle: '被忽略的来源（不会封禁）',
     banSkipReason: '跳过原因',
-    banIgnoredTip: '检测到 {n} 个来源的失败被忽略，因此不会封禁。如想封内网，请在下方关闭「忽略内网地址」。',
+    banIgnoredTip:
+      '检测到 {n} 个来源的失败被忽略，因此不会封禁。如想封内网，请在下方关闭「忽略内网地址」。',
     banDisableIgnorePrivate: '关闭忽略内网',
     banPrivateOnInfo:
       '当前未忽略内网地址：LAN / 容器网段的来源失败达到阈值也会被封禁。若你的管理 IP 在相同网段，请先加入上方「IP 白名单」，否则可能把自己锁在门外。',
@@ -2426,7 +2446,8 @@ export default {
     tabConfig: '配置信息',
     // 主配置可视化（结构模型 → 全量生成 nginx.conf）
     globalGenTitle: 'Nginx 主配置由面板全量生成',
-    globalGenTip: 'nginx.conf 是渲染产物，请勿手工修改；自定义指令请写入 conf.d 或在「包含 / 自定义」页配置。',
+    globalGenTip:
+      'nginx.conf 是渲染产物，请勿手工修改；自定义指令请写入 conf.d 或在「包含 / 自定义」页配置。',
     globalSeededTip:
       '库里没有记录，已按当前 nginx.conf 接管（识别不了的指令会在「包含 / 自定义」页原样保留）；改动需点「应用」才生效。',
     tabGlobal: '全局',
@@ -2436,7 +2457,6 @@ export default {
     tabLog: '日志',
     tabProxy: '反向代理',
     tabCache: '代理缓存',
-    tabSecurity: '安全 / WAF',
     tabInclude: '包含 / 自定义',
     addModule: '添加模块',
     addZone: '新增缓存区',
@@ -2446,10 +2466,17 @@ export default {
     purgeIps: '允许清理的来源 IP',
     confKeep: '恒保留（用户自定义）',
     topIncludes: '顶层 include',
+    topIncludesPlaceholder: '可输入自定义路径（如 /etc/nginx/conf.d/custom.conf）后按回车',
     customRaw: 'http 块内自定义指令（每行一条，省略分号）',
-    preserved: '接管时保留的原有指令',
-    preservedTip: '这些行面板无法识别，已逐行原样写回；建议迁移到 conf.d 后在这里清理。',
-    noPreserved: '没有需要保留的未知指令',
+    confDFiles: 'conf.d 配置文件',
+    confDFilesTip:
+      '直接预览或编辑 conf.d 目录下的 .conf 文件；保存时会自动执行 nginx -t 校验并尝试重载。',
+    confDEmpty: 'conf.d 目录下暂无 .conf 文件',
+    confDReadError: '读取文件失败',
+    confDSave: '保存',
+    confDSaveOk: '已保存并通过校验',
+    confDSize: '大小',
+    confDModified: '修改时间',
     preview: '预览变更',
     apply: '应用并重载',
     adopt: '重新接管',
@@ -2653,7 +2680,8 @@ export default {
     fullMode: '全量备份模式',
     modeHome: '按家目录',
     modeSite: '按站点+应用+库',
-    modeTip: 'home=遍历用户家目录；site=遍历站点文档根+应用工作目录+库（both 模式后端保留但暂不开放）',
+    modeTip:
+      'home=遍历用户家目录；site=遍历站点文档根+应用工作目录+库（both 模式后端保留但暂不开放）',
     destLabel: '落盘位置',
     destHomeOption: '用户家目录 backups',
     destSystemOption: '系统备份目录',
@@ -2759,7 +2787,8 @@ export default {
     nodejsInstallFnm: '一键安装 fnm',
     nodejsFnmOk: 'fnm 安装完成',
     nodejsFnmMissing: '未检测到 fnm',
-    nodejsFnmMissingHint: '装好后 Node 的各版本会装到 /usr/local/fnm，并软链到 /usr/local/bin，其它用户不用自己装管理器。',
+    nodejsFnmMissingHint:
+      '装好后 Node 的各版本会装到 /usr/local/fnm，并软链到 /usr/local/bin，其它用户不用自己装管理器。',
     nodejsGlobalDir: '全局目录：{dir}',
     nodejsLinked: '全局可用',
     nodejsNotLinked: '未软链到全局',
@@ -2930,7 +2959,8 @@ export default {
     auditRule: '规则文件',
     auditData: '匹配数据',
     auditRaw: '原始审计条目',
-    auditNotFound: '未找到该 unique_id 对应的审计记录（确认 WAF 已开启，且该请求命中了需审计的响应 4xx/5xx）',
+    auditNotFound:
+      '未找到该 unique_id 对应的审计记录（确认 WAF 已开启，且该请求命中了需审计的响应 4xx/5xx）',
     ruleFile: '规则文件',
     colOp: '操作',
     edit: '编辑',
@@ -2941,8 +2971,7 @@ export default {
     detectionOnlyTip: '只记录不拦截',
     engineOn: '拦截',
     engineDetection: '仅检测',
-    engineTip:
-      'DetectionOnly 只记录不拦截；切到「拦截」前先看审计日志，确认正常请求没有被误判。',
+    engineTip: 'DetectionOnly 只记录不拦截；切到「拦截」前先看审计日志，确认正常请求没有被误判。',
     engineSaved: '已切换',
     enable: '一键开启',
     enableHint:
@@ -2971,8 +3000,10 @@ export default {
     installVersion: '版本',
     installVersionPh: '留空取最新稳定版',
     installSubmit: '开始安装',
-    installHint: '安装方式：{way}。安装过程需要现场编译（分钟级），日志可在抽屉中查看；完成后需重载 PHP-FPM，面板会自动处理。',
-    eolInstallTitle: '该 PHP 版本（{version}）已停止官方安全维护，面板无法一键安装扩展，请按下方步骤从源码编译。',
+    installHint:
+      '安装方式：{way}。安装过程需要现场编译（分钟级），日志可在抽屉中查看；完成后需重载 PHP-FPM，面板会自动处理。',
+    eolInstallTitle:
+      '该 PHP 版本（{version}）已停止官方安全维护，面板无法一键安装扩展，请按下方步骤从源码编译。',
     extDir: '扩展目录 {path}',
     summarySuffix: '；安装方式：{way}',
     needPkg: '请填写扩展名',
@@ -3060,6 +3091,8 @@ export default {
     topLevel: '顶层',
     pageConf: 'Nginx 配置',
     pageStream: '四层转发',
+    pageFiles: '文件编辑',
+    pageWaf: 'WAF',
     pageGlobal: '主配置可视化',
     followDefaultPlaceholder: '跟随默认（留空不写入）',
     followDefault: '跟随默认',
@@ -3486,8 +3519,7 @@ export default {
     copyFailed: '复制失败，请手动复制',
     tabLogins: '登录记录',
     tabSshKeys: 'SSH 密钥',
-    loginsDesc:
-      '最近 50 次登录尝试（含失败）。若发现不认识的记录，请立即修改密码并下线所有设备。',
+    loginsDesc: '最近 50 次登录尝试（含失败）。若发现不认识的记录，请立即修改密码并下线所有设备。',
     logoutAllBtn: '下线所有设备',
     logoutAllTitle: '下线所有设备',
     logoutAllConfirm:
@@ -3503,7 +3535,8 @@ export default {
     prefsTitle: '通知偏好',
     prefsDesc: '选择您希望接收的提醒方式。在以下情况发生时通知我：',
     prefChannels: '默认发送渠道',
-    prefChannelsDesc: '所有通知均通过上述渠道下发。「站内信」在面板站内信中心查看，「邮件」发送至账户邮箱。',
+    prefChannelsDesc:
+      '所有通知均通过上述渠道下发。「站内信」在面板站内信中心查看，「邮件」发送至账户邮箱。',
     channelSite: '站内信',
     channelEmail: '邮件',
     prefEvents: '通知事件',
@@ -4209,8 +4242,7 @@ export default {
     add: '添加服务商',
     tipUsage:
       'API 凭据用于在 DNS-01 证书申请时自动增删 _acme-challenge 的 TXT 记录：申请时选择「自动」模式即可免手工操作、自动续费证书。',
-    tipSecurity:
-      '安全提示：凭据在数据库中加密存储，且永远不会下发到浏览器明文。',
+    tipSecurity: '安全提示：凭据在数据库中加密存储，且永远不会下发到浏览器明文。',
     colOwner: '归属',
     ownerSelf: '自己',
     colName: '名称',
@@ -4652,15 +4684,16 @@ export default {
     pushToRemote: '推送公钥到远程主机',
     formJump: '跳板机',
     jumpNone: '直连（不经过跳板机）',
-    jumpTip: '经跳板机连接：先登录跳板机，再由它转发到目标主机（等同 ssh -J）；跳板机需允许 TCP 转发',
-    jumpNoPwd:
-      '跳板机「{name}」没有保存密码，经它连接会认证失败：请先编辑该连接、填入密码并保存',
+    jumpTip:
+      '经跳板机连接：先登录跳板机，再由它转发到目标主机（等同 ssh -J）；跳板机需允许 TCP 转发',
+    jumpNoPwd: '跳板机「{name}」没有保存密码，经它连接会认证失败：请先编辑该连接、填入密码并保存',
     jumpBadge: '跳板',
     jumpBadgeTitle: '经跳板机连接',
     recTitle: '会话录制',
     recHint: '只录远端输出，不录键盘输入；录制按用户隔离存放，可随时删除',
     recSwitch: '录制',
-    recSwitchTip: '开启后会话输出会被录制成 asciinema 文件，可在「会话录制」中回放（下一条会话生效）',
+    recSwitchTip:
+      '开启后会话输出会被录制成 asciinema 文件，可在「会话录制」中回放（下一条会话生效）',
     recRefresh: '刷新',
     recTime: '开始时间',
     recConn: '连接',
@@ -4804,8 +4837,7 @@ export default {
     selectOwner: '请先选择站点的归属用户',
     dirSelected: '已选择站点目录：{path}',
     domainDup: '域名重复：{domain} 与 {other} 冲突（同一域名不可重复添加）',
-    domainTaken:
-      '域名 {domain} 已被站点「{holder}」占用，请更换或联系管理员',
+    domainTaken: '域名 {domain} 已被站点「{holder}」占用，请更换或联系管理员',
     valNameOrDomain: '请填写站点名称或至少一个域名（名称留空默认使用域名）',
     valProxyNeedLocation: '反向代理站点至少需要一个 location',
     valProxyNeedRoot: '反向代理站点需要配置一个 location / 作为默认转发路径',
@@ -4883,11 +4915,13 @@ export default {
     logClear: '清空日志',
     logClearConfirm: '确定清空当前日志？历史归档不受影响，但清空后不可恢复。',
     logCleared: '日志已清空',
-    logAuditTip: '在错误日志 / WAF 审计视图里找到命中行的 [unique_id "..."]，粘贴此处可反查完整的拦截原因与命中规则。',
+    logAuditTip:
+      '在错误日志 / WAF 审计视图里找到命中行的 [unique_id "..."]，粘贴此处可反查完整的拦截原因与命中规则。',
     logAuditPlaceholder: '粘贴 error_log 中的 unique_id',
     logAuditQuery: '反查 WAF',
     logAuditBack: '返回日志',
-    logAuditNotFound: '未找到该 unique_id 对应的审计记录（确认 WAF 已开启，且该请求命中了需审计的响应 4xx/5xx）',
+    logAuditNotFound:
+      '未找到该 unique_id 对应的审计记录（确认 WAF 已开启，且该请求命中了需审计的响应 4xx/5xx）',
     logArchiveReadonly: '归档日志只读，不支持清空',
     logEmpty: '暂无日志内容',
     logSize: '大小 {size}',
@@ -4978,20 +5012,26 @@ export default {
     appPickSitePh: '选择要管理应用的站点',
     appPickSiteTip: '请先在上方选择一个站点',
     appMount: '挂载点',
-    appMountTip: '站点上用哪个路径反代这个应用，默认 /（前缀匹配）；同一站点挂多个应用时各填各的，如 /api、/admin。选 = /path 为精确匹配，只命中该路径本身',
-    appMountStaticTip: '静态站点部署到子目录时填这里，如 /docs；访问地址即 站点域名/docs/。留空或 / 表示部署到站点根目录',
+    appMountTip:
+      '站点上用哪个路径反代这个应用，默认 /（前缀匹配）；同一站点挂多个应用时各填各的，如 /api、/admin。选 = /path 为精确匹配，只命中该路径本身',
+    appMountStaticTip:
+      '静态站点部署到子目录时填这里，如 /docs；访问地址即 站点域名/docs/。留空或 / 表示部署到站点根目录',
     appMountStaticAt: '（部署到该子目录）',
     appMountAt: '（从该路径访问）',
     appColMount: '挂载点',
     locStripPrefix: '剥离前缀',
-    locStripPrefixTip: '开启后 /njs/a 转发给后端时变成 /a（proxy_pass 带 URI）；后端只监听 / 时打开它',
+    locStripPrefixTip:
+      '开启后 /njs/a 转发给后端时变成 /a（proxy_pass 带 URI）；后端只监听 / 时打开它',
     appStripPrefix: '剥掉挂载前缀再转发',
-    locMatchModeTip: '匹配方式：/path 前缀（默认，命中该路径及子路径）、= /path 精确（只命中自身）、^~ /path 优先前缀（命中后跳过正则）、~ 正则（区分大小写）、~* 正则（不区分大小写）。正则模式路径写表达式（如 \\.(gif|jpg|png)$ 按文件名匹配），不需要以 / 开头',
+    locMatchModeTip:
+      '匹配方式：/path 前缀（默认，命中该路径及子路径）、= /path 精确（只命中自身）、^~ /path 优先前缀（命中后跳过正则）、~ 正则（区分大小写）、~* 正则（不区分大小写）。正则模式路径写表达式（如 \\.(gif|jpg|png)$ 按文件名匹配），不需要以 / 开头',
     matchPrefix: '/path 前缀匹配：命中该路径及其所有子路径（默认）',
     matchExact: '= /path 精确匹配：只命中 /path 自身，不命中 /api-docs 等子路径',
     matchPrefer: '^~ /path 优先前缀：命中后不再尝试后续正则 location（最快）',
-    matchRegex: '~ 正则匹配（区分大小写）：路径填正则表达式，无需以 / 开头，如 \\.(gif|jpg|png)$ 按文件名匹配、/\\.git/ 拦截版本库目录',
-    matchRegexNocase: '~* 正则匹配（不区分大小写）：同上，如 \\.(gif|jpg|png)$ 忽略大小写按文件名匹配',
+    matchRegex:
+      '~ 正则匹配（区分大小写）：路径填正则表达式，无需以 / 开头，如 \\.(gif|jpg|png)$ 按文件名匹配、/\\.git/ 拦截版本库目录',
+    matchRegexNocase:
+      '~* 正则匹配（不区分大小写）：同上，如 \\.(gif|jpg|png)$ 忽略大小写按文件名匹配',
     appNoSite: '暂无可选站点',
     appNoSiteTip: '还没有站点，可切换到「域名」直接创建一个反代站点',
     appQuotaTotal: '已部署 {used}/{max} 个应用',
@@ -5076,7 +5116,8 @@ export default {
     secWafRulesHint: '每行一条 SecRule 指令，随站点渲染进 modsecurity_rules',
     secWafRulesAdminOnly: '自定义规则仅管理员可修改',
     secWafLog: 'WAF 日志',
-    secWafLogHint: 'WAF 命中事件由 ModSecurity 统一写入 nginx 的 error_log；在「日志 → WAF 审计」中查看（即 error_log 的 ModSecurity 过滤视图）',
+    secWafLogHint:
+      'WAF 命中事件由 ModSecurity 统一写入 nginx 的 error_log；在「日志 → WAF 审计」中查看（即 error_log 的 ModSecurity 过滤视图）',
     logWaf: 'WAF 审计',
     secWafHint: '依托全局 ModSecurity + CRS 规则集，检出与拦截由全局引擎形态决定',
     secWafNotReady: '全局 WAF 尚未启用：请先到「服务配置 → Nginx → WAF」安装并开启',
@@ -5114,7 +5155,8 @@ export default {
     formIps: '绑定 IP',
     ipsPlaceholder: '输入 IP 后回车添加，支持多个 IPv4 / IPv6',
     ipDefaultVirtual: '默认虚拟 IP（主机默认，不显式绑定）',
-    ipBindTip: '从下拉选择自己被分配的静态 IP；不选则使用主机默认监听。多用户多 IP 时，请先在「IP 设置」把 IP 分配给该用户',
+    ipBindTip:
+      '从下拉选择自己被分配的静态 IP；不选则使用主机默认监听。多用户多 IP 时，请先在「IP 设置」把 IP 分配给该用户',
     rootBrowsePlaceholder: '浏览选择家目录下已存在的目录',
     rootNamePlaceholder: '目录名（输入域名后自动生成，可修改）',
     rootBrowseTip: '浏览并选择家目录下已存在的目录',
@@ -5130,7 +5172,8 @@ export default {
     phpStaleOption: '{name}（已停止，请改选其他运行中的版本）',
     phpNoneTip: '没有运行中的 PHP 实例：请先在「应用商店 → 已安装应用」中安装并启动 PHP 版本',
     formPseudo: '伪静态',
-    pseudoTip: '伪静态规则由执行端注入默认根 location /；自定义 rewrite / 重定向等规则请在「Location 规则」中用 raw 或附加指令自行创建。',
+    pseudoTip:
+      '伪静态规则由执行端注入默认根 location /；自定义 rewrite / 重定向等规则请在「Location 规则」中用 raw 或附加指令自行创建。',
     certStaleTitle: '站点绑定的证书已失效',
     formCert: 'SSL 证书',
     certPlaceholder: '从「SSL/TLS → 证书管理」中选择证书（选择后启用 HTTPS）',
@@ -5181,7 +5224,8 @@ export default {
       '反向代理站点至少需要一个 location / 作为默认转发（模板已自动生成）；nginx 按最长前缀匹配，规则自上而下建议从“具体路径”到“/”排列',
     locPathPlaceholder: '路径如 / 或 /api',
     locRegexPlaceholder: '正则，如 \\.(gif|jpg|png)$ 按文件名匹配，或 \\.php$',
-    locRegexTip: '正则模式：路径填写正则表达式，无需以 / 开头；点号需用 \\. 转义，整体渲染为 location ~* <表达式> {\'{}\'} 指令块',
+    locRegexTip:
+      "正则模式：路径填写正则表达式，无需以 / 开头；点号需用 \\. 转义，整体渲染为 location ~* <表达式> {'{}'} 指令块",
     locTargetRedirect: '如 https://example.com/$request_uri',
     locTargetAlias: '绝对路径（可指向应用静态目录）',
     pickDir: '从已有目录中选择',
@@ -5198,8 +5242,10 @@ export default {
     locRawPlaceholder:
       '粘贴该 location 内的完整 nginx 指令体（如 try_files / proxy_pass 等，逐行原样输出；禁止 include、# 注释与花括号）',
     advRaw: '自由指令体（raw）',
-    advRawTip: '可与上方白名单附加指令并存，用于写 rewrite 等白名单外的规则；禁止 include / 系统敏感路径 / 云元数据地址',
-    advRawPlaceholder: '如 rewrite ^/old/(.*)$ /new/$1 permanent;（逐行一条指令；禁止花括号与 include）',
+    advRawTip:
+      '可与上方白名单附加指令并存，用于写 rewrite 等白名单外的规则；禁止 include / 系统敏感路径 / 云元数据地址',
+    advRawPlaceholder:
+      '如 rewrite ^/old/(.*)$ /new/$1 permanent;（逐行一条指令；禁止花括号与 include）',
     collapseAdv: '收起高级参数 ▲',
     expandAdv: '高级参数（头 / 超时 / 缓存等）▼',
     timeoutSec: '超时(秒)',
@@ -5344,7 +5390,8 @@ export default {
     uploadName: '插件名（留空取 manifest 里的 name）',
     uploadNamePlaceholder: '留空自动识别',
     uploadFile: '插件包',
-    uploadTip: '支持 .zip / .tar.gz / .tgz / .tar，包根或唯一顶层目录里需含 manifest.yaml 与 main.lua',
+    uploadTip:
+      '支持 .zip / .tar.gz / .tgz / .tar，包根或唯一顶层目录里需含 manifest.yaml 与 main.lua',
     uploadPick: '选择文件',
     uploadNoFile: '请先选择插件包',
     adminOnly: '仅管理员可安装 / 卸载系统级插件',
@@ -5370,7 +5417,8 @@ export default {
     apiTokenHint: '以 Bearer 方式携带；只能调用该 Token 归属账号有权限的接口',
     appNameLabel: '应用名',
     appNameTip: '要重新部署的应用名称（对应 /site/app 里的 name）',
-    appNameHint: '选择该站点下的应用；重新部署会调用 /site/app/git-update，代码同步会拉取该应用目录',
+    appNameHint:
+      '选择该站点下的应用；重新部署会调用 /site/app/git-update，代码同步会拉取该应用目录',
     apiUrlLabel: 'API 地址',
     apiUrlTip: '管理接口地址，留空则自动使用本机地址（http://127.0.0.1:端口）',
     apiUrlHint: '插件从该地址回拨管理接口；一般无需修改',

@@ -5,6 +5,7 @@
 
 # Runtime
 /data/run/
+/data/conf/
 data/zap.db
 web/a.html
 zapd/conf/*

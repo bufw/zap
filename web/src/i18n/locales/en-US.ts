@@ -416,7 +416,8 @@ const enUS: Messages = {
     denyPerm: 'Revoke',
     denyPermPlaceholder: 'Permissions revoked from this member (optional)',
     readOnly: 'Read-only',
-    readOnlyTip: 'When enabled this account can only view: shared resources are visible but not editable',
+    readOnlyTip:
+      'When enabled this account can only view: shared resources are visible but not editable',
     denyPermTip:
       'Members inherit all permissions of the parent by default; checked ones are revoked (high-risk permissions are never inherited)',
 
@@ -443,7 +444,8 @@ const enUS: Messages = {
     // One-click login (sudo into a customer panel)
     sudoLogin: 'Login as',
     sudoLoginTitle: 'Log into customer panel',
-    sudoConfirm: 'Log in as "{name}"? You will have the same permissions as this customer, and all actions will be audited.',
+    sudoConfirm:
+      'Log in as "{name}"? You will have the same permissions as this customer, and all actions will be audited.',
     sudoConfirmBtn: 'Log in',
     sectionBasic: 'Basic',
     sectionAccess: 'Role & Permissions',
@@ -618,7 +620,8 @@ const enUS: Messages = {
     scope: 'Scope',
     scopeGlobalOpt: 'Global (admins only)',
     scopeSelfOpt: 'Private (only visible to you)',
-    scopeHint: 'Global packages are visible to admins only; private packages are only visible to you. Resellers can only create and manage their own private packages and cannot see packages created by admins.',
+    scopeHint:
+      'Global packages are visible to admins only; private packages are only visible to you. Resellers can only create and manage their own private packages and cannot see packages created by admins.',
 
     diskQuota: 'Disk Quota',
     maxSites: 'Sites',
@@ -657,7 +660,8 @@ const enUS: Messages = {
     phpHint:
       'When off, customers on this package cannot create PHP sites, and existing PHP sites can no longer be edited',
     waf: 'WAF',
-    wafHint: 'Allow sites of this package to enable WAF, rate limiting and connection limits (global ModSecurity still required)',
+    wafHint:
+      'Allow sites of this package to enable WAF, rate limiting and connection limits (global ModSecurity still required)',
     // Risk note: containers ≈ host root; only real on Podman
     apps: 'Apps',
     appsHint: 'Allow deploying python / nodejs apps in sites (run as the site user)',
@@ -709,7 +713,8 @@ const enUS: Messages = {
     preview: 'Preview changes',
     apply: 'Switch mirror',
     previewTitle: 'Switch preview',
-    previewHint: 'The files below will be rewritten. Originals are backed up automatically before writing.',
+    previewHint:
+      'The files below will be rewritten. Originals are backed up automatically before writing.',
     applyConfirm: 'Rewrite {n} repo file(s)? Originals will be backed up automatically.',
     applyDone: 'Mirror switched',
     noChanges: 'Nothing to apply',
@@ -772,13 +777,14 @@ const enUS: Messages = {
   // Zap settings → Notification settings (Mail moved here from the retired Basic Settings page)
   mirrorCfg: {
     title: 'Download Source',
-    subtitle: 'Where AppStore pulls source tarballs from (nginx / php / mysql, …); a local directory works offline',
+    subtitle:
+      'Where AppStore pulls source tarballs from (nginx / php / mysql, …); a local directory works offline',
     pillHint: 'Mirror for AppStore source tarballs / local offline directory',
 
-    hint:
-      'AppStore fetches source tarballs from this base. Use mirrors.zap.cn inside China, Cloudflare mirrors.zap.sh when the CN mirror is unreachable; in air-gapped networks point it at a local directory (e.g. /opt/zap-pkg) holding the same layout. The change applies to the next install — running tasks are unaffected.',
+    hint: 'AppStore fetches source tarballs from this base. Use mirrors.zap.cn inside China, Cloudflare mirrors.zap.sh when the CN mirror is unreachable; in air-gapped networks point it at a local directory (e.g. /opt/zap-pkg) holding the same layout. The change applies to the next install — running tasks are unaffected.',
     source: 'Source',
-    sourceHint: 'Pick a built-in mirror, or type one: an https://…/pkg mirror, or an absolute local directory (offline)',
+    sourceHint:
+      'Pick a built-in mirror, or type one: an https://…/pkg mirror, or an absolute local directory (offline)',
     current: 'In effect',
     remote: 'Remote mirror',
     local: 'Local directory (offline)',
@@ -787,7 +793,8 @@ const enUS: Messages = {
     saved: 'Download source saved',
     empty: 'Download source cannot be empty',
     badFormat: 'Invalid format: an http(s):// mirror URL, or an absolute local directory path',
-    localPending: 'Local directory: on save the panel host checks that it exists and holds the mirror layout (e.g. /opt/zap-pkg/php/php-8.3.6.tar.gz)',
+    localPending:
+      'Local directory: on save the panel host checks that it exists and holds the mirror layout (e.g. /opt/zap-pkg/php/php-8.3.6.tar.gz)',
     saveFailed: 'Save failed — check that the download source is valid',
   },
 
@@ -814,7 +821,8 @@ const enUS: Messages = {
     mailgunRegion: 'Data center',
     templateIdLabel: 'Template ID',
     templateIdPlaceholder: 'Fill to send via template (Tencent/Mailgun); empty = freeform body',
-    templateIdHint: 'Template ID enables template sending for Tencent Cloud SES / Mailgun; Aliyun uses freeform body. The event variables (e.g. username, time, ip) are passed to the template on send.',
+    templateIdHint:
+      'Template ID enables template sending for Tencent Cloud SES / Mailgun; Aliyun uses freeform body. The event variables (e.g. username, time, ip) are passed to the template on send.',
     sgApiKey: 'API Key',
     sgApiKeyPlaceholder: 'SendGrid API Key',
     aliyunAccessKey: 'AccessKeyId',
@@ -824,7 +832,8 @@ const enUS: Messages = {
     secretKeepHint: 'Leave empty to keep the saved secret ({hint})',
 
     templatesTitle: 'Notification Templates',
-    templatesHint: 'Customize the subject and body of each notification event with variable placeholders. Admins edit the "global" template (all users); resellers edit their "private" template (only their own users).',
+    templatesHint:
+      'Customize the subject and body of each notification event with variable placeholders. Admins edit the "global" template (all users); resellers edit their "private" template (only their own users).',
     templateScopeGlobal: 'Scope: global (all users)',
     templateScopeSelf: 'Scope: private (only my users)',
     templateSubjectLabel: 'Subject',
@@ -843,12 +852,14 @@ const enUS: Messages = {
     evSiteCreated: 'Site created',
     evDiskLow: 'Disk space low',
     testMail: 'Send test email',
-    testMailHint: 'Send a test email to a given address to verify the current mail channel works (admins only).',
+    testMailHint:
+      'Send a test email to a given address to verify the current mail channel works (admins only).',
     testMailTo: 'Recipient',
     testMailPlaceholder: "test{'@'}example.com",
     sendTest: 'Send test',
     testSent: 'Test email sent, please check your inbox',
-    mailNotConfigured: 'No mail channel configured yet; please complete the mail config above first',
+    mailNotConfigured:
+      'No mail channel configured yet; please complete the mail config above first',
 
     mailHint:
       'SMTP parameters used to send mail (system notifications, etc.). Leave the password empty to keep the current one.',
@@ -1033,8 +1044,10 @@ const enUS: Messages = {
     copyFailedManual: 'Copy failed, please select and copy manually',
 
     cacheTitle: 'Cache Cleanup',
-    cacheSubtitle: 'Free up leftover install logs, build artifacts and temporary upload files from the app store',
-    cacheHint: 'Cleans install logs and run snapshots (build dirs) of finished tasks; tasks that are running or queued will NOT be cleaned.',
+    cacheSubtitle:
+      'Free up leftover install logs, build artifacts and temporary upload files from the app store',
+    cacheHint:
+      'Cleans install logs and run snapshots (build dirs) of finished tasks; tasks that are running or queued will NOT be cleaned.',
     cacheRefresh: 'Calculate',
     cacheClean: 'Clean selected',
     cacheNoSelection: 'Please select items to clean',
@@ -1053,12 +1066,14 @@ const enUS: Messages = {
     cacheConfirm: 'This will clean the {n} selected cache types. This cannot be undone. Continue?',
     cacheCleanCancel: 'Cancel',
     cacheDone: 'Cleaned {removed} items, freed {freed} (skipped {skipped} running tasks)',
-    cacheDonePartial: 'Cleaned {removed} items, freed {freed} (skipped {skipped} running tasks, {failed} failed to delete — check permissions or retry)',
+    cacheDonePartial:
+      'Cleaned {removed} items, freed {freed} (skipped {skipped} running tasks, {failed} failed to delete — check permissions or retry)',
 
     // Security check (Zap runtime permissions and configuration security)
     secTitle: 'Security Check',
     secSubtitle: 'Check Zap runtime permissions and configuration security',
-    secHint: 'Checks the panel runtime identity, permissions of critical directories and files, and availability of the privileged executor (zapexec); user-environment and home-directory checks will be added later.',
+    secHint:
+      'Checks the panel runtime identity, permissions of critical directories and files, and availability of the privileged executor (zapexec); user-environment and home-directory checks will be added later.',
     secRescan: 'Re-scan',
     secEmpty: 'No checks to display',
     secCatZap: 'Zap Runtime',
@@ -1072,38 +1087,53 @@ const enUS: Messages = {
     secSuggest: 'Suggestion',
 
     secRuntimeUser: 'Runtime identity',
-    secRuntimeUserRoot: 'Zap runs as root (uid={uid}). If the panel is compromised, the attacker gains full host control — a serious privilege-escalation risk.',
-    secRuntimeUserRootSug: 'Create a dedicated low-privilege account (e.g. zapadm) for the panel, and keep only zapexec running as root for privilege-dropped script execution.',
-    secRuntimeUserOk: 'Zap runs as {name} (uid={uid}), not root — follows the principle of least privilege.',
+    secRuntimeUserRoot:
+      'Zap runs as root (uid={uid}). If the panel is compromised, the attacker gains full host control — a serious privilege-escalation risk.',
+    secRuntimeUserRootSug:
+      'Create a dedicated low-privilege account (e.g. zapadm) for the panel, and keep only zapexec running as root for privilege-dropped script execution.',
+    secRuntimeUserOk:
+      'Zap runs as {name} (uid={uid}), not root — follows the principle of least privilege.',
 
     secDataWritable: 'Data directory writable',
-    secDataWritableOk: 'Data directory {path} is writable; the panel can save config and persist data normally.',
-    secDataWritableFail: 'Data directory {path} is not writable (runtime uid={uid} lacks permission); the panel may fail to save config or write data.',
-    secDataWritableSug: 'Check directory ownership and permissions so the runtime identity (uid={uid}) can write to the data directory.',
+    secDataWritableOk:
+      'Data directory {path} is writable; the panel can save config and persist data normally.',
+    secDataWritableFail:
+      'Data directory {path} is not writable (runtime uid={uid} lacks permission); the panel may fail to save config or write data.',
+    secDataWritableSug:
+      'Check directory ownership and permissions so the runtime identity (uid={uid}) can write to the data directory.',
 
     secConfigPerms: 'Config file permissions',
     secConfigPermsOk: 'Config file {path} has mode {mode}; not readable by other users.',
-    secConfigPermsWorldRead: 'Config file {path} has mode {mode} and is world-readable; it contains the JWT secret, posing a leak risk.',
-    secConfigPermsWorldWrite: 'Config file {path} has mode {mode} and is world-writable, posing a tampering risk.',
+    secConfigPermsWorldRead:
+      'Config file {path} has mode {mode} and is world-readable; it contains the JWT secret, posing a leak risk.',
+    secConfigPermsWorldWrite:
+      'Config file {path} has mode {mode} and is world-writable, posing a tampering risk.',
     secConfigPermsMissing: 'Config file {path} does not exist (built-in defaults are used).',
-    secConfigPermsSug: 'Set the config file to mode 640 (owner rw, zap group r) and ensure the owner is the runtime identity.',
+    secConfigPermsSug:
+      'Set the config file to mode 640 (owner rw, zap group r) and ensure the owner is the runtime identity.',
 
     secCertKey: 'Panel private key permissions',
     secCertKeyOk: 'Private key {path} has mode {mode}; readable only by the owner — compliant.',
-    secCertKeyWorldRead: 'Private key {path} has mode {mode} and is world-readable; a leak would allow session forgery.',
-    secCertKeyWorldWrite: 'Private key {path} has mode {mode} and is world-writable, posing a replacement risk.',
+    secCertKeyWorldRead:
+      'Private key {path} has mode {mode} and is world-readable; a leak would allow session forgery.',
+    secCertKeyWorldWrite:
+      'Private key {path} has mode {mode} and is world-writable, posing a replacement risk.',
     secCertKeyMissing: 'Private key file {path} does not exist (not yet configured or moved).',
     secCertKeySug: 'Set the private key to mode 600 (owner rw only).',
 
     secWorldWritable: 'World-writable check',
     secWorldWritableOk: 'Data, appstore and user directories are not world-writable.',
-    secWorldWritableWarn: '{count} world-writable path(s) found: {paths}; other users may tamper with these files.',
+    secWorldWritableWarn:
+      '{count} world-writable path(s) found: {paths}; other users may tamper with these files.',
     secWorldWritableSug: 'Remove world-write permission on the listed paths (chmod o-w).',
 
     secZapexec: 'Privileged executor',
-    secZapexecOk: 'The zapexec IPC socket {path} exists; software install and privilege-dropped execution are available.',
-    secZapexecFail: 'The zapexec IPC socket {path} was not found; privileged operations (install, dropped execution) will be unavailable.',
-    secZapexecSug: 'Ensure zapexec is installed and running, and that exec.socket_path in zap.yaml matches the executor socket path.',
+    secZapexecOk:
+      'The zapexec IPC socket {path} exists; software install and privilege-dropped execution are available.',
+    secZapexecFail:
+      'The zapexec IPC socket {path} was not found; privileged operations (install, dropped execution) will be unavailable.',
+    secZapexecSug:
+      'Ensure zapexec is installed and running, and that exec.socket_path in zap.yaml matches the executor socket path.',
   },
 
   sysUpdate: {
@@ -1243,7 +1273,8 @@ const enUS: Messages = {
     extractDialog: {
       title: 'Extract Archive',
       source: 'Archive',
-      sourceHint: 'Only zip / tar / tar.gz / tgz / tar.bz2 / tar.xz / 7z / gz (tar.bz2 / tar.xz / 7z need the corresponding system tool)',
+      sourceHint:
+        'Only zip / tar / tar.gz / tgz / tar.bz2 / tar.xz / 7z / gz (tar.bz2 / tar.xz / 7z need the corresponding system tool)',
       destMode: 'Extract to',
       here: 'Current folder (same as the archive)',
       newFolder: 'New folder with the same name',
@@ -1253,7 +1284,8 @@ const enUS: Messages = {
       target: 'Target path',
       pickDir: 'Choose folder',
       start: 'Extract',
-      unsupported: 'Unsupported archive format (only zip / tar / tar.gz / tgz / tar.bz2 / tar.xz / 7z / gz)',
+      unsupported:
+        'Unsupported archive format (only zip / tar / tar.gz / tgz / tar.bz2 / tar.xz / 7z / gz)',
     },
     rename: 'Rename',
     perm: 'Permissions',
@@ -1288,7 +1320,8 @@ const enUS: Messages = {
     dirNamePlaceholder: 'Directory name, e.g. sub/dir (missing parents are created)',
     fileName: 'File Name',
     fileNamePlaceholder: 'File name, e.g. sub/dir/file.txt (missing parents are created)',
-    pathHint: 'Supports "dir/dir/name" form; missing intermediate directories are created automatically',
+    pathHint:
+      'Supports "dir/dir/name" form; missing intermediate directories are created automatically',
     newName: 'New Name',
     newNamePlaceholder: 'Enter a new name',
     dupName: 'Copy Name',
@@ -1729,7 +1762,8 @@ const enUS: Messages = {
     backendMode: 'Backend mode',
     backendSingle: 'Single',
     backendGroup: 'Group (upstream)',
-    backendModeTip: 'Single forwards straight to the address below; Group builds an upstream and can hold several members',
+    backendModeTip:
+      'Single forwards straight to the address below; Group builds an upstream and can hold several members',
     targets: 'Group members',
     targetsTip: 'One per line as host:port, optional params (weight=2 / backup / max_fails=3)',
     targetsRequired: 'Upstream group requires the server list (at least one host:port line)',
@@ -1747,7 +1781,8 @@ const enUS: Messages = {
     sslEnableTip: 'Terminate TLS on the listen port and forward plaintext to the backend',
     certFromStore: 'Cert from store',
     certFromStorePlaceholder: 'Pick a certificate (leave empty to enter paths manually)',
-    certFromStoreTip: 'The selected certificate is written to disk for Nginx and takes precedence over the manual paths below',
+    certFromStoreTip:
+      'The selected certificate is written to disk for Nginx and takes precedence over the manual paths below',
     certRequired: 'Enable TLS requires picking a certificate or entering cert paths',
     sslCertificate: 'Certificate path',
     sslCertificateKey: 'Key path',
@@ -2453,32 +2488,40 @@ const enUS: Messages = {
     tabLog: 'Logging',
     tabProxy: 'Reverse proxy',
     tabCache: 'Proxy cache',
-    tabSecurity: 'Security / WAF',
     tabInclude: 'Include / Custom',
     addModule: 'Add module',
     addZone: 'Add zone',
     noZone: 'No shared cache zone',
-    cacheTip: 'Zone names can be referenced from a site location\'s cache setting',
+    cacheTip: "Zone names can be referenced from a site location's cache setting",
     purgeEnable: 'Enable cache purge allowlist',
     purgeIps: 'Allowed source IPs',
     confKeep: 'Always included (user-defined)',
     topIncludes: 'Top-level includes',
+    topIncludesPlaceholder:
+      'Type a custom path (e.g. /etc/nginx/conf.d/custom.conf) and press Enter',
     customRaw: 'Custom directives in the http block (one per line, no semicolon)',
-    preserved: 'Preserved directives adopted from old config',
-    preservedTip:
-      'These lines are not recognized by the panel and are written back verbatim. Move them to conf.d to clean this up.',
-    noPreserved: 'Nothing preserved',
+    confDFiles: 'conf.d configuration files',
+    confDFilesTip:
+      'Preview or edit .conf files under the conf.d directory; saving runs nginx -t validation and reloads when valid.',
+    confDEmpty: 'No .conf files found in conf.d',
+    confDReadError: 'Failed to read file',
+    confDSave: 'Save',
+    confDSaveOk: 'Saved and validated',
+    confDSize: 'Size',
+    confDModified: 'Modified',
     preview: 'Preview changes',
     apply: 'Apply & reload',
     adopt: 'Re-adopt',
-    adoptConfirm: 'This rebuilds the model from the live nginx.conf. Unsaved changes will be lost. Continue?',
+    adoptConfirm:
+      'This rebuilds the model from the live nginx.conf. Unsaved changes will be lost. Continue?',
     adoptOk: 'Model rebuilt from live config',
     applyOk: 'Written and validated',
     applyOkReloaded: 'Written and reloaded',
     history: 'Revisions',
     view: 'View',
     rollback: 'Rollback',
-    rollbackConfirm: 'This overwrites the current nginx.conf with that revision (validated first). Continue?',
+    rollbackConfirm:
+      'This overwrites the current nginx.conf with that revision (validated first). Continue?',
     rollbackOk: 'Rolled back',
     actor: 'Actor',
     time: 'Time',
@@ -2571,7 +2614,8 @@ const enUS: Messages = {
     // my backups
     mySettings: 'My Backup Settings',
     retain: 'Copies to keep',
-    retainTip: 'Keep the latest N copies; older ones are cleaned automatically (overrides the global default)',
+    retainTip:
+      'Keep the latest N copies; older ones are cleaned automatically (overrides the global default)',
     myBackups: 'My Backups',
     myEmpty: 'No backups yet',
     colDest: 'Location',
@@ -2582,7 +2626,8 @@ const enUS: Messages = {
     retentionLoadFailed: 'Failed to load retention setting',
     restoreTitle: 'Restore',
     restoreFromHome: 'Will restore from the backup in your home directory',
-    restoreFromSystem: 'Will restore from the server system backup directory (copy from admin full backup)',
+    restoreFromSystem:
+      'Will restore from the server system backup directory (copy from admin full backup)',
     engineLabel: 'Database type',
     targetDb: 'Target database',
     targetDbPh: 'Database name to restore into',
@@ -2591,7 +2636,8 @@ const enUS: Messages = {
     restoreToOriginal: 'Restore to original paths',
     unpackTargetDir: 'Unpack target directory',
     unpackTargetDirPh: 'e.g. /home/u/www/restore',
-    toOriginalTip: 'Files will be written back to their original absolute paths (admin or the backup owner only).',
+    toOriginalTip:
+      'Files will be written back to their original absolute paths (admin or the backup owner only).',
     dbNoPasswordTip: 'Database restore uses stored credentials; no password needed.',
     targetDirRequired: 'Enter the unpack target directory',
     dbNameRequired: 'Enter the target database name',
@@ -2617,10 +2663,13 @@ const enUS: Messages = {
     kindDirFile: 'Directory / Files',
     pathLabel: 'Paths',
     pathPh: 'One absolute path per line',
-    pathUserTip: 'Only absolute paths inside your own home directory are allowed (validated server-side)',
+    pathUserTip:
+      'Only absolute paths inside your own home directory are allowed (validated server-side)',
     dbNameLabel: 'Database name',
-    dbNameUserTip: 'Only databases owned by you are allowed (name must start with your account prefix; validated server-side)',
-    moreConn: 'More connection info (leave empty to use local zapadm; fill in to back up a remote database)',
+    dbNameUserTip:
+      'Only databases owned by you are allowed (name must start with your account prefix; validated server-side)',
+    moreConn:
+      'More connection info (leave empty to use local zapadm; fill in to back up a remote database)',
     dbUser: 'User',
     dbUserPh: 'Empty = zapadm',
     dbPass: 'Password',
@@ -2668,15 +2717,18 @@ const enUS: Messages = {
     allowUserBackup: 'Allow user self-service backup',
     allowUserBackupTip: 'When off, regular users cannot back up their own sites / databases',
     allowUserJob: 'Allow user scheduled backups',
-    allowUserJobTip: 'When off, regular users cannot create / modify scheduled backup jobs (existing ones become hidden and inert)',
+    allowUserJobTip:
+      'When off, regular users cannot create / modify scheduled backup jobs (existing ones become hidden and inert)',
     fullMode: 'Full backup mode',
     modeHome: 'By home directory',
     modeSite: 'By site + app + db',
-    modeTip: 'home = walk user home directories; site = walk site doc roots + app workdirs + databases (the both mode is kept server-side but not exposed)',
+    modeTip:
+      'home = walk user home directories; site = walk site doc roots + app workdirs + databases (the both mode is kept server-side but not exposed)',
     destLabel: 'Destination',
     destHomeOption: 'User home backups/',
     destSystemOption: 'System backup directory',
-    destOptionTip: 'home = each user <home>/backups (self-managed / restorable); system = one central system directory',
+    destOptionTip:
+      'home = each user <home>/backups (self-managed / restorable); system = one central system directory',
     excludeLabel: 'Default exclude list',
     excludePh: 'One pattern per line, e.g. node_modules, .cache, *.log',
     excludeTip:
@@ -2684,10 +2736,12 @@ const enUS: Messages = {
     globalRetain: 'Global retention',
     globalRetainTip: 'Default number of copies when a user has not set their own',
     allEnabled: 'Enable full backup',
-    allEnabledTip: 'When on, all user data is backed up automatically on the schedule below (owned per user; restorable from the system directory)',
+    allEnabledTip:
+      'When on, all user data is backed up automatically on the schedule below (owned per user; restorable from the system directory)',
     allSchedule: 'Full backup schedule',
     allSchedulePh: 'Empty = no automatic backup',
-    allScheduleTip: 'Meaning: {desc} (empty = no auto backup; standard 5-field cron, custom expressions allowed)',
+    allScheduleTip:
+      'Meaning: {desc} (empty = no auto backup; standard 5-field cron, custom expressions allowed)',
     lastReport: 'Last full backup',
     lastReportTip: '{ok} succeeded / {fail} failed',
     seeAudit: '; see audit log for details',
@@ -2762,7 +2816,8 @@ const enUS: Messages = {
     mirrorOfficial: 'Official (direct)',
     mirrorChina: 'China mirror (when GitHub / nodejs.org are slow)',
     mirrorOk: 'Download mirror switched',
-    mirrorHint: 'uv installs via pip (using the PyPI index above); fnm and Node use mirrored downloads.',
+    mirrorHint:
+      'uv installs via pip (using the PyPI index above); fnm and Node use mirrored downloads.',
     npmRegistry: 'npm registry',
     npmRegistryApply: 'Apply',
     npmRegistryCurrent: 'Active: {url}',
@@ -2773,19 +2828,23 @@ const enUS: Messages = {
     npmNeedUrl: 'Please enter a custom registry URL',
     nodejsTab: 'Node.js',
     nodejsTitle: 'Node.js runtime',
-    nodejsSub: 'Versions are managed globally by fnm; install once and every user just picks a version.',
+    nodejsSub:
+      'Versions are managed globally by fnm; install once and every user just picks a version.',
     nodejsFnm: 'fnm (version manager)',
     nodejsInstallFnm: 'Install fnm',
     nodejsFnmOk: 'fnm installed',
     nodejsFnmMissing: 'fnm not detected',
-    nodejsFnmMissingHint: 'Once installed, Node versions live in /usr/local/fnm and are symlinked into /usr/local/bin for all users.',
+    nodejsFnmMissingHint:
+      'Once installed, Node versions live in /usr/local/fnm and are symlinked into /usr/local/bin for all users.',
     nodejsGlobalDir: 'Global dir: {dir}',
     nodejsLinked: 'Available globally',
     nodejsNotLinked: 'Not linked globally',
-    nodejsLinkHint: 'Setting a default symlinks node / npm / npx into /usr/local/bin for other users.',
+    nodejsLinkHint:
+      'Setting a default symlinks node / npm / npx into /usr/local/bin for other users.',
     nodejsVersionPlaceholder: 'e.g. 20',
     nodejsVersions: 'Installed versions',
-    nodejsHint: 'Apps without an explicit version use the default one; fnm versions work for every user.',
+    nodejsHint:
+      'Apps without an explicit version use the default one; fnm versions work for every user.',
     overview: 'Overview',
     nginx: 'Nginx',
     php: 'PHP',
@@ -2941,7 +3000,8 @@ const enUS: Messages = {
     viewAudit: 'View',
     auditTitle: 'WAF audit log (last 200 lines)',
     auditEmpty: 'No audit records yet',
-    auditUidPlaceholder: 'Enter unique_id to look up one audit entry (from error_log tail [unique_id "..."])',
+    auditUidPlaceholder:
+      'Enter unique_id to look up one audit entry (from error_log tail [unique_id "..."])',
     auditQuery: 'Query',
     auditTail: 'Latest 200 lines',
     auditReqLine: 'Request',
@@ -3090,6 +3150,8 @@ const enUS: Messages = {
     topLevel: 'Top level',
     pageConf: 'Nginx config',
     pageStream: 'Stream (L4)',
+    pageFiles: 'File Editing',
+    pageWaf: 'WAF',
     pageGlobal: 'Main config',
     followDefaultPlaceholder: 'Follow default (empty = not written)',
     followDefault: 'Follow default',
@@ -3652,8 +3714,10 @@ const enUS: Messages = {
       stopped: 'Docker daemon not running',
       ready: 'Docker {version}',
       composeOff: 'Compose plugin unavailable',
-      hintMissing: 'Container management needs the Docker CLI and daemon on this host. Install Docker and start its service first.',
-      hintStopped: 'The Docker CLI works but the daemon is not ready. Run systemctl start docker and try again.',
+      hintMissing:
+        'Container management needs the Docker CLI and daemon on this host. Install Docker and start its service first.',
+      hintStopped:
+        'The Docker CLI works but the daemon is not ready. Run systemctl start docker and try again.',
     },
     tabs: {
       containers: 'Containers',
@@ -3836,7 +3900,8 @@ const enUS: Messages = {
       preview: 'Will build as',
       context: 'Build context',
       contextPlaceholder: 'Pick the directory that holds your Containerfile',
-      contextHint: 'Normal accounts are limited to their own home directory; admins may pick any path.',
+      contextHint:
+        'Normal accounts are limited to their own home directory; admins may pick any path.',
       pickPath: 'Browse',
       pickTitle: 'Select build context directory',
       containerfile: 'Containerfile',
@@ -3859,7 +3924,8 @@ const enUS: Messages = {
       logTitle: 'Build log',
       failed: 'Failed to start the build',
       needName: 'Please enter an image name',
-      badName: 'Image names allow lowercase letters, digits and . _ - / only, with an optional :tag',
+      badName:
+        'Image names allow lowercase letters, digits and . _ - / only, with an optional :tag',
       badCase: 'Image name must not contain uppercase letters',
       badTag: 'Invalid tag: {tag}',
       needContext: 'Please pick the build context directory',
@@ -3939,11 +4005,14 @@ const enUS: Messages = {
       editTitle: 'Edit compose.yaml',
       project: 'Project name',
       namePlaceholder: 'e.g. nginx',
-      nameHint: 'Starts with a letter or digit, may contain _ . - (max 63); the file lives under the panel stacks dir',
-      nameInvalid: 'Invalid project name: start with a letter or digit, may contain _ . -, max 63 chars',
+      nameHint:
+        'Starts with a letter or digit, may contain _ . - (max 63); the file lives under the panel stacks dir',
+      nameInvalid:
+        'Invalid project name: start with a letter or digit, may contain _ . -, max 63 chars',
       overwriteConfirm: 'Project "{name}" already exists. Overwrite its compose.yaml?',
       content: 'compose.yaml',
-      contentPlaceholder: 'Paste the compose content, or click "Import file" to pick a .yml / .yaml',
+      contentPlaceholder:
+        'Paste the compose content, or click "Import file" to pick a .yml / .yaml',
       editorHint: 'Indent YAML with spaces',
       pickServer: 'Pick from server',
       importFile: 'Upload from this machine',
@@ -3953,7 +4022,8 @@ const enUS: Messages = {
       startAfterCreate: 'Start right after saving',
       contentRequired: 'Compose content is required',
       saved: 'Config saved',
-      savedHint: 'Config saved: click "Start" or "Rebuild" to apply (use "Rebuild" if the image build changed)',
+      savedHint:
+        'Config saved: click "Start" or "Rebuild" to apply (use "Rebuild" if the image build changed)',
       saveFailed: 'Save failed',
       selectHint: 'Pick a project on the left, or click "Compose" to create one',
       containers: 'Service containers',
@@ -4312,7 +4382,8 @@ const enUS: Messages = {
     tabInstalled: 'Installed',
     tabMine: 'My Site Apps',
     tabPlugins: 'Plugins',
-    multiInstanceHint: 'This package has several instances; operate per instance on the Installed tab',
+    multiInstanceHint:
+      'This package has several instances; operate per instance on the Installed tab',
     tagInstalled: 'Installed',
     tagNotInstalled: 'Not Installed',
     tagMultiVersion: 'Multi-Version',
@@ -4750,7 +4821,8 @@ const enUS: Messages = {
     recEmpty: 'No recordings',
     recLoadFailed: 'Failed to load recordings',
     recPlayFailed: 'Replay failed: recording is empty',
-    recDeleteConfirm: 'Delete this session recording? The file is removed too and cannot be restored',
+    recDeleteConfirm:
+      'Delete this session recording? The file is removed too and cannot be restored',
     recDeleteDone: 'Recording deleted',
     recDeleteFailed: 'Failed to delete recording',
     recPlaying: 'Playing',
@@ -4976,11 +5048,13 @@ const enUS: Messages = {
     logClear: 'Clear log',
     logClearConfirm: 'Clear the current log? Archives are kept, but this cannot be undone.',
     logCleared: 'Log cleared',
-    logAuditTip: 'Find the [unique_id "..."] in the error log / WAF audit view, paste it here to look up the full block reason and matched rules.',
+    logAuditTip:
+      'Find the [unique_id "..."] in the error log / WAF audit view, paste it here to look up the full block reason and matched rules.',
     logAuditPlaceholder: 'Paste the unique_id from error_log',
     logAuditQuery: 'Lookup WAF',
     logAuditBack: 'Back to log',
-    logAuditNotFound: 'No audit record found for this unique_id (make sure WAF is on and the request triggered an audited 4xx/5xx response)',
+    logAuditNotFound:
+      'No audit record found for this unique_id (make sure WAF is on and the request triggered an audited 4xx/5xx response)',
     logArchiveReadonly: 'Archived logs are read-only',
     logEmpty: 'No log content',
     logSize: 'Size {size}',
@@ -5012,10 +5086,12 @@ const enUS: Messages = {
     tabProxy: 'Load Balancing',
     baseInfoTitle: 'More',
     baseInfoDesc: 'Site name, run status and remark',
-    locEmpty: 'No location rules yet. Click the button below to add one (e.g. rewrite, static dir, custom location).',
+    locEmpty:
+      'No location rules yet. Click the button below to add one (e.g. rewrite, static dir, custom location).',
     expand: 'Expand',
     collapse: 'Collapse',
-    proxyTabLocked: 'Reverse proxy is not enabled for the current package. Enable allow_proxy in System → Package.',
+    proxyTabLocked:
+      'Reverse proxy is not enabled for the current package. Enable allow_proxy in System → Package.',
     appGated: 'Application Manager is not enabled for your package',
     appAdd: 'Deploy app',
     appEdit: 'Edit app',
@@ -5046,7 +5122,8 @@ const enUS: Messages = {
     appGitUpdateTaskTitle: 'Update app {name}',
     appWorkdir: 'Working dir',
     appWorkdirPh: 'auto-filled with the site root once an existing site is picked',
-    appWorkdirTip: 'Deploying under an existing site auto-fills its root; or pick another directory with the button',
+    appWorkdirTip:
+      'Deploying under an existing site auto-fills its root; or pick another directory with the button',
     appEntry: 'Entry',
     appCommand: 'Start command',
     appCommandTip: 'Auto-detected from the type when empty',
@@ -5071,20 +5148,26 @@ const enUS: Messages = {
     appPickSitePh: 'Pick a site to manage its apps',
     appPickSiteTip: 'Select a site above first',
     appMount: 'Mount path',
-    appMountTip: 'Which path proxies this app (default /, prefix match). Use a distinct path per app, e.g. /api, /admin. = /path is exact: that path only',
-    appMountStaticTip: 'For a static site deployed under a sub-directory, fill it here, e.g. /docs — the URL becomes domain/docs/. Leave empty or / for the site root',
+    appMountTip:
+      'Which path proxies this app (default /, prefix match). Use a distinct path per app, e.g. /api, /admin. = /path is exact: that path only',
+    appMountStaticTip:
+      'For a static site deployed under a sub-directory, fill it here, e.g. /docs — the URL becomes domain/docs/. Leave empty or / for the site root',
     appMountStaticAt: ' (deployed to this sub-directory)',
     appMountAt: ' (accessible from this path)',
     appColMount: 'Mount',
     locStripPrefix: 'Strip prefix',
-    locStripPrefixTip: 'On: /njs/a is forwarded to the backend as /a (proxy_pass with URI). Enable when the app only serves /.',
+    locStripPrefixTip:
+      'On: /njs/a is forwarded to the backend as /a (proxy_pass with URI). Enable when the app only serves /.',
     appStripPrefix: 'Strip mount prefix',
-    locMatchModeTip: 'Match mode: /path prefix (default, hits the path and its subpaths), = /path exact (only the path itself), ^~ /path prefer (skips later regex), ~ regex (case-sensitive), ~* regex (case-insensitive). Regex mode takes an expression as the path (e.g. \\.(gif|jpg|png)$ to match by filename) and does NOT need a leading /',
+    locMatchModeTip:
+      'Match mode: /path prefix (default, hits the path and its subpaths), = /path exact (only the path itself), ^~ /path prefer (skips later regex), ~ regex (case-sensitive), ~* regex (case-insensitive). Regex mode takes an expression as the path (e.g. \\.(gif|jpg|png)$ to match by filename) and does NOT need a leading /',
     matchPrefix: '/path prefix: hits the path and all subpaths (default)',
     matchExact: '= /path exact: only /path itself, not subpaths like /api-docs',
     matchPrefer: '^~ /path prefer: after a hit, later regex locations are skipped (fastest)',
-    matchRegex: '~ regex (case-sensitive): path is a regular expression, no leading / required, e.g. \\.(gif|jpg|png)$ to match by filename, /\\.git/ to block the VCS dir',
-    matchRegexNocase: '~* regex (case-insensitive): same as above, e.g. \\.(gif|jpg|png)$ ignoring case to match image extensions',
+    matchRegex:
+      '~ regex (case-sensitive): path is a regular expression, no leading / required, e.g. \\.(gif|jpg|png)$ to match by filename, /\\.git/ to block the VCS dir',
+    matchRegexNocase:
+      '~* regex (case-insensitive): same as above, e.g. \\.(gif|jpg|png)$ ignoring case to match image extensions',
     appNoSite: 'No site available',
     appNoSiteTip: 'No site yet — switch to "Domain" to create a reverse-proxy site',
     appQuotaTotal: '{used}/{max} apps deployed',
@@ -5102,7 +5185,8 @@ const enUS: Messages = {
     appRunning: 'Running',
     appStopped: 'Stopped',
     appDown: 'Crashed',
-    appRemoveConfirm: 'Delete app "{name}"? The process is stopped and its unit removed (project files stay)',
+    appRemoveConfirm:
+      'Delete app "{name}"? The process is stopped and its unit removed (project files stay)',
     appActionDone: 'Action submitted',
     appActionFailed: 'Action failed',
     appOnlySite: 'Site only',
@@ -5157,7 +5241,8 @@ const enUS: Messages = {
     appSyncFailed: 'App deployed, but site sync failed — sync it manually in the site list',
     tabAdvanced: 'Proxy / Advanced',
     tabSecurity: 'Security',
-    secLoadFailed: 'Failed to load security settings: update and restart the backend (API /site/security unavailable)',
+    secLoadFailed:
+      'Failed to load security settings: update and restart the backend (API /site/security unavailable)',
     secSaveWithSite: 'Configure it here; it is saved together with the site (applied on save)',
     secWaf: 'WAF',
     secWafMode: 'WAF mode',
@@ -5169,11 +5254,15 @@ const enUS: Messages = {
     secWafRulesHint: 'One SecRule per line, rendered into modsecurity_rules',
     secWafRulesAdminOnly: 'Custom rules can only be edited by administrators',
     secWafLog: 'WAF log',
-    secWafLogHint: 'WAF hits are written by ModSecurity into nginx error_log; view them under Logs → WAF audit (a filtered view of error_log lines containing "ModSecurity")',
+    secWafLogHint:
+      'WAF hits are written by ModSecurity into nginx error_log; view them under Logs → WAF audit (a filtered view of error_log lines containing "ModSecurity")',
     logWaf: 'WAF audit',
-    secWafHint: 'Backed by global ModSecurity + CRS; detection/blocking follows the global engine mode',
-    secWafNotReady: 'Global WAF is not enabled: install and turn it on in Service Config → Nginx → WAF',
-    secWafNotAllowed: 'Your account has no site WAF permission (ask the admin to enable it in System → Packages)',
+    secWafHint:
+      'Backed by global ModSecurity + CRS; detection/blocking follows the global engine mode',
+    secWafNotReady:
+      'Global WAF is not enabled: install and turn it on in Service Config → Nginx → WAF',
+    secWafNotAllowed:
+      'Your account has no site WAF permission (ask the admin to enable it in System → Packages)',
     secLimitReq: 'Rate limit',
     secLimitReqHint: 'Per-IP requests per second; excess requests get 429',
     secReqRate: 'Requests/sec',
@@ -5184,7 +5273,8 @@ const enUS: Messages = {
     secDryRunHint: 'Log hits only, do not block — observe before enforcing',
     secWhitelist: 'Rate-limit / WAF whitelist',
     secWhitelistPh: '10.0.0.0/8, 1.2.3.4',
-    secWhitelistHint: 'IP or CIDR, comma/newline separated; exempt from rate limit and WAF (admin only)',
+    secWhitelistHint:
+      'IP or CIDR, comma/newline separated; exempt from rate limit and WAF (admin only)',
     locDryRun: 'dry run (log only)',
     secLimitConn: 'Connection limit',
     secLimitConnHint: 'Per-IP concurrent connections; excess gets 429',
@@ -5282,7 +5372,8 @@ const enUS: Messages = {
       'A reverse proxy site needs at least one location / as the default forward (the template generates it automatically); nginx matches the longest prefix, so order rules from specific paths to "/" top-down',
     locPathPlaceholder: 'Path, e.g. / or /api',
     locRegexPlaceholder: 'Regex, e.g. \\.(gif|jpg|png)$ to match by filename, or \\.php$',
-    locRegexTip: 'Regex mode: the path is a regular expression, no leading / required; escape dots with \\. and it renders as a location ~* <expr> {\'{}\'} block',
+    locRegexTip:
+      "Regex mode: the path is a regular expression, no leading / required; escape dots with \\. and it renders as a location ~* <expr> {'{}'} block",
     locTargetRedirect: 'e.g. https://example.com/$request_uri',
     locTargetAlias: 'Absolute path (may point to the app static dir)',
     pickDir: 'Pick an existing directory',
@@ -5319,7 +5410,8 @@ const enUS: Messages = {
     proxyCache: 'Proxy Cache',
     cacheValidPlaceholder: 'proxy_cache_valid, e.g. 200 5m (empty = default 200 1m)',
     cacheZonePlaceholder: 'Select / type a zone (empty = off)',
-    cacheZoneTip: 'Zones are defined on the main config\'s "Proxy cache" tab; empty disables caching',
+    cacheZoneTip:
+      'Zones are defined on the main config\'s "Proxy cache" tab; empty disables caching',
     locLimitReq: 'Request rate limit',
     locLimitReqTip: 'requests per second (0 = unlimited)',
     locLimitBurstTip: 'burst',
@@ -5420,7 +5512,8 @@ const enUS: Messages = {
   /** Developer - plugins */
   devPlugins: {
     headTitle: 'Plugins',
-    headSub: 'Install / uninstall Lua plugins; they surface as actions on site details and other slots',
+    headSub:
+      'Install / uninstall Lua plugins; they surface as actions on site details and other slots',
     installUpload: 'Upload',
     refresh: 'Refresh',
     tabAll: 'All plugins',
@@ -5471,14 +5564,18 @@ const enUS: Messages = {
     siteIdLabel: 'Site ID',
     siteIdTip: 'Only needed for site-scoped plugins; leave empty for no site',
     apiTokenLabel: 'API Token',
-    apiTokenTip: 'Credential used to call back the management API (create one on the Dev / API Token page)',
+    apiTokenTip:
+      'Credential used to call back the management API (create one on the Dev / API Token page)',
     apiTokenHint: 'Sent as Bearer; can only invoke endpoints the token owner is allowed to access',
     appNameLabel: 'App name',
     appNameTip: 'Name of the app to redeploy (the name under /site/app)',
-    appNameHint: 'Pick an app under that site; redeploy calls /site/app/git-update, code sync pulls that app dir',
+    appNameHint:
+      'Pick an app under that site; redeploy calls /site/app/git-update, code sync pulls that app dir',
     apiUrlLabel: 'API URL',
-    apiUrlTip: 'Management API base URL; leave empty to auto-use the local address (http://127.0.0.1:port)',
-    apiUrlHint: 'The plugin calls back the management API at this address; usually no need to change',
+    apiUrlTip:
+      'Management API base URL; leave empty to auto-use the local address (http://127.0.0.1:port)',
+    apiUrlHint:
+      'The plugin calls back the management API at this address; usually no need to change',
     capabilityLabel: 'Automation capability',
     capGroupDeploy: 'Deploy & Ops',
     capRedeploy: 'Redeploy app',
@@ -5491,7 +5588,8 @@ const enUS: Messages = {
     del: 'Delete',
     save: 'Save',
     rotate: 'Rotate',
-    rotateTip: 'The old webhook URL stops working right after rotation — update callers accordingly',
+    rotateTip:
+      'The old webhook URL stops working right after rotation — update callers accordingly',
     empty: 'No triggers yet',
     none: 'never run',
     lastOk: 'ok',
@@ -5516,7 +5614,8 @@ const enUS: Messages = {
     passed: 'pass',
     failed: 'fail',
     skipped: 'skipped',
-    empty: 'No cases yet — drop a tests.yaml in the plugin directory to declare actions and assertions',
+    empty:
+      'No cases yet — drop a tests.yaml in the plugin directory to declare actions and assertions',
   },
 
   /** Messages */
