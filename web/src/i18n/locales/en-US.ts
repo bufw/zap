@@ -4390,6 +4390,8 @@ const enUS: Messages = {
     tagCustom: 'Custom',
     noDescription: 'No description',
     versionColon: 'Version:',
+    verCount: '{n} versions',
+    optVersionLabel: 'Version',
     depColon: 'Dependencies: {list}',
     depSep: ', ',
     portColon: 'Port: {port}',

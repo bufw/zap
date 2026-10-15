@@ -65,36 +65,24 @@
 
         <el-table-column label="版本" width="300">
           <template #default="{ row }">
-            <span v-if="row.versions && row.versions.length > 1" class="pkg-ver-sel">
-              {{ t('appstore.versionColon') }}
-              <el-select
-                size="small"
-                :style="{ width: versionGroups(row).length ? '210px' : '130px' }"
-                :model-value="selVersion[row.pkg_path] || row.version"
-                @change="onSelVersion(row, $event)"
-              >
-                <template v-if="versionGroups(row).length">
-                  <el-option-group v-for="g in versionGroups(row)" :key="g.family" :label="g.label">
-                    <el-option v-for="ver in g.versions" :key="ver" :label="ver" :value="ver">
-                      <div class="ver-opt-row">
-                        <span>{{ ver }}</span>
-                        <el-tag :type="familyTagType(g.family)" size="small" effect="plain">{{ g.short }}</el-tag>
-                      </div>
-                    </el-option>
-                  </el-option-group>
-                </template>
-                <el-option v-else v-for="ver in row.versions" :key="ver" :label="ver" :value="ver" />
-              </el-select>
+            <span class="pkg-ver-sel">
+              {{ t('appstore.versionColon') }} <b>{{ row.version || '-' }}</b>
               <el-tag
-                v-if="familyOf(row, curVersion(row))"
+                v-if="familyOf(row, row.version)"
                 class="ver-fam-tag"
-                :type="familyTagType(familyOf(row, curVersion(row)))"
+                :type="familyTagType(familyOf(row, row.version))"
                 size="small"
                 effect="light"
-                >{{ familyLabelOf(row, curVersion(row)) }}</el-tag
+                >{{ familyLabelOf(row, row.version) }}</el-tag
+              >
+              <el-tag
+                v-if="row.versions && row.versions.length > 1"
+                size="small"
+                type="info"
+                effect="plain"
+                >{{ t('appstore.verCount', { n: row.versions.length }) }}</el-tag
               >
             </span>
-            <span v-else>{{ t('appstore.versionColon') }} <b>{{ row.version || '-' }}</b></span>
           </template>
         </el-table-column>
 
@@ -206,7 +194,27 @@
       width="620px"
       :close-on-click-modal="false"
     >
-      <el-form v-if="optList.length" label-width="140px" label-position="left" @submit.prevent>
+      <el-form
+        v-if="optList.length || showVerSelect"
+        label-width="140px"
+        label-position="left"
+        @submit.prevent
+      >
+        <el-form-item v-if="showVerSelect" :label="t('appstore.optVersionLabel')">
+          <el-select v-model="optVersion" style="width: 100%">
+            <template v-if="optVersionGroups.length">
+              <el-option-group v-for="g in optVersionGroups" :key="g.family" :label="g.label">
+                <el-option v-for="ver in g.versions" :key="ver" :label="ver" :value="ver">
+                  <div class="ver-opt-row">
+                    <span>{{ ver }}</span>
+                    <el-tag :type="familyTagType(g.family)" size="small" effect="plain">{{ g.short }}</el-tag>
+                  </div>
+                </el-option>
+              </el-option-group>
+            </template>
+            <el-option v-else v-for="ver in optVersionList" :key="ver" :label="ver" :value="ver" />
+          </el-select>
+        </el-form-item>
         <el-form-item
           v-for="o in optList"
           :key="o.name"
@@ -411,12 +419,13 @@ async function loadPackages() {
 
 const selVersion = ref<Record<string, string>>({})
 
-function onSelVersion(pkg: AppPackage, v: string) {
-  selVersion.value[pkg.pkg_path] = v
-}
-
 function curVersion(pkg: AppPackage): string {
   return selVersion.value[pkg.pkg_path] || pkg.version || ''
+}
+
+/** 包是否有多个可选版本（版本选择放到选项对话框里做） */
+function hasVersionChoice(pkg: AppPackage): boolean {
+  return !!pkg.versions && pkg.versions.length > 1
 }
 
 // ── 版本家族元数据 ──────────────────────────────────────────
@@ -503,6 +512,16 @@ const optValues = ref<Record<string, any>>({})
 const optFieldError = ref<Record<string, string>>({})
 const optSubmitting = ref(false)
 const optIntro = ref('')
+/** 对话框内选定的安装/升级版本（仅多版本包出现） */
+const optVersion = ref('')
+
+const showVerSelect = computed(() => {
+  const pkg = optPkg.value
+  return !!pkg && optMode.value !== 'uninstall' && hasVersionChoice(pkg)
+})
+
+const optVersionList = computed(() => optPkg.value?.versions || [])
+const optVersionGroups = computed(() => (optPkg.value ? versionGroups(optPkg.value) : []))
 
 function optModeName(m: OptMode, pkg: AppPackage): string {
   if (m === 'upgrade') return t('appstore.btnUpgrade')
@@ -607,12 +626,14 @@ function openOptionsDialog(pkg: AppPackage, actionKey: string | undefined, mode:
   const strict = mode === 'uninstall'
   const defs = optionsFor(pkg, key, strict)
   const intro = optionsIntro(pkg, key, strict)
-  if (!defs.length && !intro) return
+  const verSelect = mode !== 'uninstall' && hasVersionChoice(pkg)
+  if (!defs.length && !intro && !verSelect) return
   optMode.value = mode
   optPkg.value = pkg
   optActionKey.value = actionKey || ''
   optList.value = defs
   optIntro.value = intro
+  optVersion.value = curVersion(pkg) || pkg.version || ''
   const vals: Record<string, any> = {}
   for (const o of defs) vals[o.name] = optDefault(o)
   optValues.value = vals
@@ -659,6 +680,10 @@ async function submitOptions() {
   try {
     const pkg = optPkg.value
     if (!pkg) return
+    // 对话框里选定的版本写回全局选择，doInstall / doUpgrade 经 curVersion 读取
+    if (showVerSelect.value && optVersion.value) {
+      selVersion.value[pkg.pkg_path] = optVersion.value
+    }
     const ok =
       optMode.value === 'install'
         ? await doInstall(pkg, optActionKey.value || undefined, opts)
@@ -672,7 +697,7 @@ async function submitOptions() {
 // ── 安装 / 卸载 / 升级 ─────────────────────────────────────
 
 async function handleInstall(pkg: AppPackage, actionKey?: string) {
-  if (hasOptionsDialog(pkg, actionKey)) {
+  if (hasOptionsDialog(pkg, actionKey) || hasVersionChoice(pkg)) {
     openOptionsDialog(pkg, actionKey, 'install')
     return
   }
@@ -765,7 +790,7 @@ async function doUninstall(pkg: AppPackage, options?: FormOptions): Promise<bool
 }
 
 async function handleUpgrade(pkg: AppPackage) {
-  if (hasOptionsDialog(pkg, 'upgrade')) {
+  if (hasOptionsDialog(pkg, 'upgrade') || hasVersionChoice(pkg)) {
     openOptionsDialog(pkg, undefined, 'upgrade')
     return
   }

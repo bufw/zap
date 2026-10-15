@@ -16,6 +16,7 @@ data/appstore/runs/*
 data/appstore/cache/*
 data/appstore/custom/*
 data/ssh_recordings/*
+data/services/*
 data/apps/*/
 data/sites/*
 data/pro/*

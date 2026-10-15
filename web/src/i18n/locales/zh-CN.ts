@@ -4298,6 +4298,8 @@ export default {
     tagCustom: '自定义',
     noDescription: '暂无描述',
     versionColon: '版本:',
+    verCount: '{n} 个版本',
+    optVersionLabel: '版本',
     depColon: '依赖: {list}',
     depSep: '、',
     portColon: '端口: {port}',
