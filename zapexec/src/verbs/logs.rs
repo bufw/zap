@@ -12,7 +12,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use chrono::Local;
-use serde_json::json;
+use serde_json::{Value, json};
 use zap_proto::Response;
 
 use super::root_cmd;
@@ -94,16 +94,34 @@ fn archive_date(name: &str) -> Option<String> {
     }
 }
 
-/// 取 access.log 行的状态码（请求行结束引号后的第一个字段）
-fn status_of(line: &str) -> &str {
-    let Some(start) = line.find('"') else {
-        return "";
+/// 取 access.log 行的状态码。
+/// - 传统 combined / main：请求行结束引号后的第一个字段；
+/// - JSON：`"status":200`（数字或字符串）。
+fn status_of(line: &str) -> String {
+    let trimmed = line.trim();
+    if trimmed.starts_with('{') {
+        return serde_json::from_str::<Value>(trimmed)
+            .ok()
+            .and_then(|v| v.get("status").cloned())
+            .map(|v| match v {
+                Value::Number(n) => n.to_string(),
+                Value::String(s) => s,
+                _ => String::new(),
+            })
+            .unwrap_or_default();
+    }
+    let Some(start) = trimmed.find('"') else {
+        return String::new();
     };
-    let rest = &line[start + 1..];
+    let rest = &trimmed[start + 1..];
     let Some(end) = rest.find('"') else {
-        return "";
+        return String::new();
     };
-    rest[end + 1..].split_whitespace().next().unwrap_or("")
+    rest[end + 1..]
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_string()
 }
 
 /// 通知 nginx 重新打开日志文件（USR1）：不断连接，比 reload 更轻。
@@ -588,6 +606,9 @@ mod tests {
     fn status_token_is_extracted() {
         let line = r#"1.2.3.4 - - [15/Sep/2026:10:00:00 +0800] "GET /a HTTP/1.1" 404 12 "-" "UA""#;
         assert_eq!(status_of(line), "404");
+        // json_combined 默认值：status 是字符串，且使用 request 而不是 uri
+        let json = r#"{"time_local":"[15/Sep/2026:10:00:00 +0800]","request":"GET /a HTTP/1.1","status":"404","body_bytes_sent":"12","http_user_agent":"UA"}"#;
+        assert_eq!(status_of(json), "404");
     }
 
     #[test]

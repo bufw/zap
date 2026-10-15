@@ -1,40 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <template>
-  <div class="nginx-page">
-    <!-- 四层转发（stream{}）是 nginx 的能力，入口收在这里，不再单独占一个菜单 -->
-    <nav class="nginx-pills">
-      <button
-        type="button"
-        class="nginx-pill"
-        :class="{ 'is-active': page === 'conf' }"
-        @click="setPage('conf')"
-      >
-        {{ t('servicesNginx.pageConf') }}
-      </button>
-      <button
-        type="button"
-        class="nginx-pill"
-        :class="{ 'is-active': page === 'stream' }"
-        @click="setPage('stream')"
-      >
-        {{ t('servicesNginx.pageStream') }}
-      </button>
-      <button
-        type="button"
-        class="nginx-pill"
-        :class="{ 'is-active': page === 'global' }"
-        @click="setPage('global')"
-      >
-        {{ t('servicesNginx.pageGlobal') }}
-      </button>
-    </nav>
-
-    <!-- 主配置可视化：结构模型 → 面板全量生成 nginx.conf -->
-    <NginxGlobal v-show="page === 'global'" />
-
-    <!-- v-show：切回来时编辑器里没保存的内容还在 -->
-    <div v-show="page === 'conf'" v-loading="bootLoading" class="nginx-config">
-    <!-- 顶部信息与操作 -->
+  <div class="nginx-page" v-loading="bootLoading">
+    <!-- 顶部状态（所有子页共享） -->
     <el-card shadow="never" class="top-card">
       <div class="top-row">
         <div class="title">
@@ -98,268 +65,243 @@
     </el-card>
 
     <template v-if="installed">
-      <!-- 默认站点（IP / 未匹配域名兜底） -->
-      <el-card shadow="never" class="mt-3 default-vhost">
-        <div class="dvh-row">
-          <div class="dvh-left">
-            <div class="dvh-title">
-              {{ t('servicesNginx.defaultVhostTitle') }}
-              <el-tag size="small" :type="ipAccess ? 'success' : 'info'">
-                {{ ipAccess ? t('servicesNginx.ipOn') : t('servicesNginx.ipOff') }}
-              </el-tag>
+      <!-- 导航：主配置 / 四层转发 / 文件编辑 / WAF 并列一排 -->
+      <nav class="nginx-pills">
+        <button
+          type="button"
+          class="nginx-pill"
+          :class="{ 'is-active': page === 'conf' }"
+          @click="setPage('conf')"
+        >
+          {{ t('servicesNginx.pageConf') }}
+        </button>
+        <button
+          type="button"
+          class="nginx-pill"
+          :class="{ 'is-active': page === 'stream' }"
+          @click="setPage('stream')"
+        >
+          {{ t('servicesNginx.pageStream') }}
+        </button>
+        <button
+          type="button"
+          class="nginx-pill"
+          :class="{ 'is-active': page === 'files' }"
+          @click="setPage('files')"
+        >
+          {{ t('servicesNginx.pageFiles') }}
+        </button>
+        <button
+          type="button"
+          class="nginx-pill"
+          :class="{ 'is-active': page === 'waf' }"
+          @click="setPage('waf')"
+        >
+          {{ t('servicesNginx.pageWaf') }}
+        </button>
+      </nav>
+
+      <!-- Nginx 配置：默认站点 + 主配置可视化（替换原“可视化配置” tab） -->
+      <div v-show="page === 'conf'" class="nginx-config">
+        <el-card shadow="never" class="mt-3 default-vhost">
+          <div class="dvh-row">
+            <div class="dvh-left">
+              <div class="dvh-title">
+                {{ t('servicesNginx.defaultVhostTitle') }}
+                <el-tag size="small" :type="ipAccess ? 'success' : 'info'">
+                  {{ ipAccess ? t('servicesNginx.ipOn') : t('servicesNginx.ipOff') }}
+                </el-tag>
+              </div>
+              <div class="dvh-desc">
+                {{ t('servicesNginx.defaultVhostDesc') }}
+              </div>
+              <div v-if="ipAccess && status.default_page" class="dvh-path mono">
+                {{ t('servicesNginx.welcomePage', { path: status.default_page }) }}
+              </div>
             </div>
-            <div class="dvh-desc">
-              {{ t('servicesNginx.defaultVhostDesc') }}
-            </div>
-            <div v-if="ipAccess && status.default_page" class="dvh-path mono">
-              {{ t('servicesNginx.welcomePage', { path: status.default_page }) }}
+            <div class="dvh-right">
+              <el-switch
+                v-model="ipAccess"
+                :loading="savingDefaultVhost"
+                inline-prompt
+                :active-text="t('servicesNginx.on')"
+                :inactive-text="t('servicesNginx.off')"
+                @change="saveDefaultVhost"
+              />
             </div>
           </div>
-          <div class="dvh-right">
-            <el-switch
-              v-model="ipAccess"
-              :loading="savingDefaultVhost"
-              inline-prompt
-              :active-text="t('servicesNginx.on')"
-              :inactive-text="t('servicesNginx.off')"
-              @change="saveDefaultVhost"
-            />
+        </el-card>
+
+        <NginxGlobal class="mt-3" />
+      </div>
+
+      <StreamConf v-show="page === 'stream'" />
+
+      <!-- 文件编辑 -->
+      <div v-show="page === 'files'" class="nginx-config mt-3">
+        <div class="editor-layout">
+          <div class="file-list">
+            <div class="list-head">
+              <span>{{ t('servicesNginx.editableConfs') }}</span>
+              <el-tag size="small" type="info">{{ confFiles.length }}</el-tag>
+            </div>
+            <el-scrollbar class="list-scroll">
+              <div
+                v-for="f in confFiles"
+                :key="f.path"
+                class="file-item"
+                :class="{ active: activeFile?.path === f.path }"
+                @click="openFile(f)"
+              >
+                <el-icon><Document /></el-icon>
+                <span class="file-name mono">{{
+                  f.is_main ? t('servicesNginx.mainConfName') : f.rel
+                }}</span>
+              </div>
+            </el-scrollbar>
+          </div>
+          <div class="editor-main">
+            <div class="editor-bar">
+              <div class="bar-left">
+                <span class="mono path">{{
+                  activeFile?.path || t('servicesNginx.selectFile')
+                }}</span>
+                <span v-if="activeFile" class="meta">{{ formatBytes(activeFile.size) }}</span>
+                <el-tag v-if="activeFile?.is_main" size="small" type="warning">{{
+                  t('servicesNginx.mainConfTag')
+                }}</el-tag>
+              </div>
+              <div class="bar-right">
+                <el-button
+                  size="small"
+                  :disabled="!dirty || !activeFile"
+                  :loading="savingFile"
+                  type="primary"
+                  @click="saveFile"
+                  >{{ t('servicesNginx.save') }}</el-button
+                >
+                <el-button
+                  size="small"
+                  :disabled="!dirty || !activeFile"
+                  @click="reloadActiveFile"
+                  >{{ t('servicesNginx.discardChanges') }}</el-button
+                >
+              </div>
+            </div>
+            <div class="editor-host">
+              <CodeEditor v-model="fileContent" :path="activeFile?.path || ''" />
+            </div>
+            <div class="editor-tip">
+              {{ t('servicesNginx.editorTip1') }}<code>nginx -t</code
+              >{{ t('servicesNginx.editorTip2') }} <code>include …/sites-enabled/*.conf</code
+              >{{ t('servicesNginx.editorTip3') }}
+            </div>
           </div>
         </div>
-      </el-card>
+      </div>
 
-      <el-tabs v-model="mode" type="border-card" class="mt-3">
-        <!-- 可视化配置 -->
-        <el-tab-pane :label="t('servicesNginx.tabVisual')" name="visual">
-          <div class="visual-body">
-            <el-alert
-              type="info"
-              :closable="false"
-              show-icon
-              class="visual-tip"
-              :title="t('servicesNginx.visualTip')"
-            />
-            <div class="field-grid">
-              <div v-for="f in allFields" :key="f.key" class="field">
-                <div class="field-label">
-                  <span class="mono">{{ f.key }}</span>
-                  <el-tag v-if="f.key === TOP_LEVEL_KEY" size="small" type="warning">{{
-                    t('servicesNginx.topLevel')
-                  }}</el-tag>
-                  <el-tag v-else size="small" type="info">http</el-tag>
-                </div>
-                <el-input
-                  v-if="f.kind === 'input'"
-                  v-model="visual[f.key]"
-                  :placeholder="f.placeholder || t('servicesNginx.followDefaultPlaceholder')"
-                  clearable
-                  class="field-ctrl"
-                />
-                <el-select
-                  v-else-if="f.kind === 'switch'"
-                  v-model="visual[f.key]"
-                  :placeholder="t('servicesNginx.followDefault')"
-                  clearable
-                  class="field-ctrl"
-                >
-                  <el-option :label="t('servicesNginx.optionOn')" value="on" />
-                  <el-option :label="t('servicesNginx.optionOff')" value="off" />
-                </el-select>
-                <el-select
-                  v-else
-                  v-model="visual[f.key]"
-                  :placeholder="t('servicesNginx.followDefault')"
-                  clearable
-                  class="field-ctrl"
-                >
-                  <el-option v-for="n in 9" :key="n" :label="`${n}`" :value="`${n}`" />
-                </el-select>
-                <div v-if="f.tip" class="field-tip">{{ f.tip }}</div>
-              </div>
+      <!-- WAF（ModSecurity）：可选能力，未安装时只给安装引导 -->
+      <div v-show="page === 'waf'" class="nginx-config mt-3" v-loading="wafLoading">
+        <!-- 未安装：说明缺什么，能装才给按钮 -->
+        <el-result
+          v-if="waf && !waf.installed"
+          icon="warning"
+          :title="t('waf.notInstalledTitle')"
+          :sub-title="waf.hint"
+        >
+          <template #extra>
+            <div class="waf-blockers">
+              <div v-for="b in waf.blockers" :key="b" class="waf-blocker">· {{ b }}</div>
             </div>
-            <div class="save-row">
-              <el-button :loading="savingVisual" type="primary" @click="saveVisual">{{
-                t('servicesNginx.saveVisual')
-              }}</el-button>
-              <el-button :disabled="savingVisual" @click="loadVisualFromFile">{{
-                t('servicesNginx.reloadFromFile')
-              }}</el-button>
-            </div>
-          </div>
-        </el-tab-pane>
-
-        <!-- 文件编辑 -->
-        <el-tab-pane :label="t('servicesNginx.tabFiles')" name="files">
-          <div class="editor-layout">
-            <div class="file-list">
-              <div class="list-head">
-                <span>{{ t('servicesNginx.editableConfs') }}</span>
-                <el-tag size="small" type="info">{{ confFiles.length }}</el-tag>
-              </div>
-              <el-scrollbar class="list-scroll">
-                <div
-                  v-for="f in confFiles"
-                  :key="f.path"
-                  class="file-item"
-                  :class="{ active: activeFile?.path === f.path }"
-                  @click="openFile(f)"
-                >
-                  <el-icon><Document /></el-icon>
-                  <span class="file-name mono">{{
-                    f.is_main ? t('servicesNginx.mainConfName') : f.rel
-                  }}</span>
-                </div>
-              </el-scrollbar>
-            </div>
-            <div class="editor-main">
-              <div class="editor-bar">
-                <div class="bar-left">
-                  <span class="mono path">{{
-                    activeFile?.path || t('servicesNginx.selectFile')
-                  }}</span>
-                  <span v-if="activeFile" class="meta">{{ formatBytes(activeFile.size) }}</span>
-                  <el-tag v-if="activeFile?.is_main" size="small" type="warning">{{
-                    t('servicesNginx.mainConfTag')
-                  }}</el-tag>
-                </div>
-                <div class="bar-right">
-                  <el-button
-                    size="small"
-                    :disabled="!dirty || !activeFile"
-                    :loading="savingFile"
-                    type="primary"
-                    @click="saveFile"
-                    >{{ t('servicesNginx.save') }}</el-button
-                  >
-                  <el-button
-                    size="small"
-                    :disabled="!dirty || !activeFile"
-                    @click="reloadActiveFile"
-                    >{{ t('servicesNginx.discardChanges') }}</el-button
-                  >
-                </div>
-              </div>
-              <div class="editor-host">
-                <CodeEditor v-model="fileContent" :path="activeFile?.path || ''" />
-              </div>
-              <div class="editor-tip">
-                {{ t('servicesNginx.editorTip1') }}<code>nginx -t</code
-                >{{ t('servicesNginx.editorTip2') }} <code>include …/sites-enabled/*.conf</code
-                >{{ t('servicesNginx.editorTip3') }}
-              </div>
-            </div>
-          </div>
-        </el-tab-pane>
-
-        <!-- WAF（ModSecurity）：可选能力，未安装时只给安装引导 -->
-        <el-tab-pane :label="t('waf.tab')" name="waf">
-          <div v-loading="wafLoading">
-            <!-- 未安装：说明缺什么，能装才给按钮 -->
-            <el-result
-              v-if="waf && !waf.installed"
-              icon="warning"
-              :title="t('waf.notInstalledTitle')"
-              :sub-title="waf.hint"
+            <el-button
+              v-if="waf.enable_ready"
+              type="success"
+              :loading="wafEnabling"
+              @click="doEnableWaf"
             >
-              <template #extra>
-                <div class="waf-blockers">
-                  <div v-for="b in waf.blockers" :key="b" class="waf-blocker">· {{ b }}</div>
-                </div>
-                <el-button
-                  v-if="waf.enable_ready"
-                  type="success"
-                  :loading="wafEnabling"
-                  @click="doEnableWaf"
-                >
-                  {{ t('waf.enable') }}
-                </el-button>
-                <el-button
-                  v-else
-                  type="primary"
-                  :disabled="!waf.installable"
-                  :loading="wafInstalling"
-                  @click="doInstallWaf"
-                >
-                  {{ waf.installable ? t('waf.install') : t('waf.cannotInstall') }}
-                </el-button>
-                <div v-if="waf.enable_ready" class="waf-blocker">
-                  {{ t('waf.enableHint') }}
-                </div>
+              {{ t('waf.enable') }}
+            </el-button>
+            <el-button
+              v-else
+              type="primary"
+              :disabled="!waf.installable"
+              :loading="wafInstalling"
+              @click="doInstallWaf"
+            >
+              {{ waf.installable ? t('waf.install') : t('waf.cannotInstall') }}
+            </el-button>
+            <div v-if="waf.enable_ready" class="waf-blocker">
+              {{ t('waf.enableHint') }}
+            </div>
+          </template>
+        </el-result>
+
+        <template v-if="waf?.installed">
+          <el-descriptions :column="2" border size="small" class="waf-desc">
+            <el-descriptions-item :label="t('waf.engine')">
+              <div class="waf-engine">
+                <el-tag size="small" :type="waf.engine === 'On' ? 'success' : 'warning'">
+                  {{ waf.engine || '-' }}
+                </el-tag>
+                <el-switch
+                  size="small"
+                  :model-value="waf.engine === 'On'"
+                  :loading="wafEngineSwitching"
+                  :active-text="t('waf.engineOn')"
+                  :inactive-text="t('waf.engineDetection')"
+                  @change="onWafEngineSwitch"
+                />
+              </div>
+              <div class="waf-inline-tip">{{ t('waf.engineTip') }}</div>
+            </el-descriptions-item>
+            <el-descriptions-item :label="t('waf.crs')">
+              <el-tag size="small" :type="waf.crs ? 'success' : 'info'">
+                {{ waf.crs ? t('waf.deployed') : t('waf.missing') }}
+              </el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item :label="t('waf.module')">
+              <span class="mono">{{ waf.module || '-' }}</span>
+            </el-descriptions-item>
+            <el-descriptions-item :label="t('waf.rulesDir')">
+              <span class="mono">{{ waf.rules_dir }}</span>
+            </el-descriptions-item>
+            <el-descriptions-item :label="t('waf.auditLog')">
+              <span class="mono">{{ waf.audit_log || '-' }}</span>
+              <el-button
+                size="small"
+                class="waf-inline-btn"
+                :disabled="!waf.audit_log"
+                @click="openAudit"
+              >
+                {{ t('waf.viewAudit') }}
+              </el-button>
+            </el-descriptions-item>
+          </el-descriptions>
+
+          <el-alert
+            type="warning"
+            :closable="false"
+            show-icon
+            class="mt-3"
+            :title="t('waf.saveTip')"
+          />
+
+          <el-table :data="waf.files" size="small" stripe class="mt-3">
+            <el-table-column prop="rel" :label="t('waf.ruleFile')" min-width="240">
+              <template #default="{ row }">
+                <span class="mono">{{ row.rel }}</span>
               </template>
-            </el-result>
-
-            <template v-if="waf?.installed">
-              <el-descriptions :column="2" border size="small" class="waf-desc">
-                <el-descriptions-item :label="t('waf.engine')">
-                  <div class="waf-engine">
-                    <el-tag
-                      size="small"
-                      :type="waf.engine === 'On' ? 'success' : 'warning'"
-                    >
-                      {{ waf.engine || '-' }}
-                    </el-tag>
-                    <el-switch
-                      size="small"
-                      :model-value="waf.engine === 'On'"
-                      :loading="wafEngineSwitching"
-                      :active-text="t('waf.engineOn')"
-                      :inactive-text="t('waf.engineDetection')"
-                      @change="onWafEngineSwitch"
-                    />
-                  </div>
-                  <div class="waf-inline-tip">{{ t('waf.engineTip') }}</div>
-                </el-descriptions-item>
-                <el-descriptions-item :label="t('waf.crs')">
-                  <el-tag size="small" :type="waf.crs ? 'success' : 'info'">
-                    {{ waf.crs ? t('waf.deployed') : t('waf.missing') }}
-                  </el-tag>
-                </el-descriptions-item>
-                <el-descriptions-item :label="t('waf.module')">
-                  <span class="mono">{{ waf.module || '-' }}</span>
-                </el-descriptions-item>
-                <el-descriptions-item :label="t('waf.rulesDir')">
-                  <span class="mono">{{ waf.rules_dir }}</span>
-                </el-descriptions-item>
-                <el-descriptions-item :label="t('waf.auditLog')">
-                  <span class="mono">{{ waf.audit_log || '-' }}</span>
-                  <el-button
-                    size="small"
-                    class="waf-inline-btn"
-                    :disabled="!waf.audit_log"
-                    @click="openAudit"
-                  >
-                    {{ t('waf.viewAudit') }}
-                  </el-button>
-                </el-descriptions-item>
-              </el-descriptions>
-
-              <el-alert
-                type="warning"
-                :closable="false"
-                show-icon
-                class="mt-3"
-                :title="t('waf.saveTip')"
-              />
-
-              <el-table :data="waf.files" size="small" stripe class="mt-3">
-                <el-table-column prop="rel" :label="t('waf.ruleFile')" min-width="240">
-                  <template #default="{ row }">
-                    <span class="mono">{{ row.rel }}</span>
-                  </template>
-                </el-table-column>
-                <el-table-column :label="t('waf.colOp')" width="120" align="right">
-                  <template #default="{ row }">
-                    <el-button size="small" @click="openRule(row.path)">
-                      {{ t('waf.edit') }}
-                    </el-button>
-                  </template>
-                </el-table-column>
-              </el-table>
-            </template>
-          </div>
-        </el-tab-pane>
-      </el-tabs>
-
+            </el-table-column>
+            <el-table-column :label="t('waf.colOp')" width="120" align="right">
+              <template #default="{ row }">
+                <el-button size="small" @click="openRule(row.path)">
+                  {{ t('waf.edit') }}
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </template>
+      </div>
     </template>
 
     <!-- WAF：规则编辑 / 审计日志 / 安装日志（未安装时不会走到这里） -->
@@ -447,9 +389,6 @@
     </el-dialog>
 
     <AppStoreLogDrawer ref="logDrawer" />
-    </div>
-
-    <StreamConf v-if="page === 'stream'" />
   </div>
 </template>
 
@@ -471,12 +410,6 @@ import {
   type NginxConfFile,
   type NginxStatus,
 } from '@/api/serverNginx.ts'
-import {
-  applyVisualValues,
-  parseVisualValues,
-  TOP_LEVEL_KEY,
-  type VisualValues,
-} from '@/utils/nginxConf.ts'
 import StreamConf from './stream.vue'
 import AppStoreLogDrawer from '@/components/AppStoreLogDrawer.vue'
 import { getTask } from '@/api/task.ts'
@@ -500,8 +433,8 @@ const busy = ref(false)
 const acting = ref('')
 const installed = ref<boolean | null>(null)
 const status = ref<NginxStatus>({})
-/** conf = nginx 自身配置；stream = 四层转发规则；global = 主配置可视化（全量生成 nginx.conf） */
-const PAGE_KEYS = ['conf', 'stream', 'global'] as const
+/** conf = 主配置可视化；stream = 四层转发规则；files = 文件编辑；waf = WAF */
+const PAGE_KEYS = ['conf', 'stream', 'files', 'waf'] as const
 type NginxPage = (typeof PAGE_KEYS)[number]
 /** 初始子页：优先 ?page=（配合 ?tab=nginx，刷新后停留在原子页） */
 const page = ref<NginxPage>(
@@ -509,7 +442,6 @@ const page = ref<NginxPage>(
     ? (String(route.query.page) as NginxPage)
     : 'conf',
 )
-const mode = ref('visual')
 
 function setPage(p: NginxPage) {
   page.value = p
@@ -550,123 +482,6 @@ async function saveDefaultVhost(v: boolean | string | number) {
   }
 }
 
-/* ---------- 可视化 ---------- */
-interface FieldDef {
-  key: string
-  kind: 'input' | 'switch' | 'level'
-  label: string
-  placeholder?: string
-  tip?: string
-}
-
-const allFields = computed<FieldDef[]>(() => [
-  {
-    key: TOP_LEVEL_KEY,
-    kind: 'input',
-    label: t('servicesNginx.fieldWorkers'),
-    placeholder: t('servicesNginx.fieldWorkersPlaceholder'),
-    tip: t('servicesNginx.fieldWorkersTip'),
-  },
-  { key: 'sendfile', kind: 'switch', label: 'sendfile', tip: t('servicesNginx.fieldSendfileTip') },
-  {
-    key: 'tcp_nopush',
-    kind: 'switch',
-    label: 'tcp_nopush',
-    tip: t('servicesNginx.fieldTcpNopushTip'),
-  },
-  {
-    key: 'keepalive_timeout',
-    kind: 'input',
-    label: 'keepalive_timeout',
-    placeholder: t('servicesNginx.fieldKeepalivePlaceholder'),
-  },
-  {
-    key: 'server_tokens',
-    kind: 'switch',
-    label: 'server_tokens',
-    tip: t('servicesNginx.fieldServerTokensTip'),
-  },
-  {
-    key: 'client_max_body_size',
-    kind: 'input',
-    label: 'client_max_body_size',
-    placeholder: t('servicesNginx.fieldClientMaxBodyPlaceholder'),
-    tip: t('servicesNginx.fieldClientMaxBodyTip'),
-  },
-  { key: 'gzip', kind: 'switch', label: 'gzip', tip: t('servicesNginx.fieldGzipTip') },
-  {
-    key: 'gzip_min_length',
-    kind: 'input',
-    label: 'gzip_min_length',
-    placeholder: t('servicesNginx.fieldGzipMinLengthPlaceholder'),
-  },
-  {
-    key: 'gzip_comp_level',
-    kind: 'level',
-    label: 'gzip_comp_level',
-    tip: t('servicesNginx.fieldGzipCompLevelTip'),
-  },
-  {
-    key: 'gzip_types',
-    kind: 'input',
-    label: 'gzip_types',
-    placeholder: t('servicesNginx.fieldGzipTypesPlaceholder'),
-    tip: t('servicesNginx.fieldGzipTypesTip'),
-  },
-])
-
-const visual = reactive<VisualValues>({})
-const mainPath = ref('')
-const savingVisual = ref(false)
-
-function initVisual() {
-  for (const f of allFields.value) {
-    visual[f.key] = null
-  }
-}
-
-async function loadVisualFromFile() {
-  if (!mainPath.value) return
-  try {
-    const res = await readNginxConf(mainPath.value)
-    if (res.code !== 0) return
-    const parsed = parseVisualValues(res.data.content)
-    initVisual()
-    for (const k of Object.keys(visual)) {
-      if (parsed[k] !== undefined) visual[k] = parsed[k]
-    }
-  } catch {
-    /* interceptor */
-  }
-}
-
-async function saveVisual() {
-  if (!mainPath.value) return
-  savingVisual.value = true
-  try {
-    // 始终基于磁盘最新文本做最小行级补丁，避免覆盖面板 include 等托管行
-    const latest = await readNginxConf(mainPath.value)
-    if (latest.code !== 0) return
-    const patched = applyVisualValues(latest.data.content, { ...visual })
-    if (patched === null) {
-      ElMessage.error(t('servicesNginx.noHttpBlock'))
-      return
-    }
-    const res = await saveNginxConf(mainPath.value, patched)
-    ElMessage.success(
-      res.data?.reloaded
-        ? t('servicesNginx.visualSavedReloaded')
-        : t('servicesNginx.visualSavedReason', {
-            reason: res.data?.reason || t('servicesNginx.passed'),
-          }),
-    )
-  } catch {
-    /* interceptor */
-  } finally {
-    savingVisual.value = false
-  }
-}
-
 /* ---------- 文件编辑 ---------- */
 const confFiles = ref<NginxConfFile[]>([])
 const activeFile = ref<NginxConfFile | null>(null)
@@ -682,7 +497,6 @@ async function refreshConfList() {
     if (res.code !== 0) return
     const data = res.data
     confFiles.value = data.files
-    if (!mainPath.value && data.conf_file) mainPath.value = data.conf_file
     if (!activeFile.value && confFiles.value.length) {
       await openFile(confFiles.value.find((f) => f.is_main) || confFiles.value[0])
     } else if (activeFile.value) {
@@ -763,7 +577,6 @@ async function refreshAll() {
   await refreshStatus()
   if (installed.value) {
     await refreshConfList()
-    if (mainPath.value) await loadVisualFromFile()
   }
   bootLoading.value = false
 }
@@ -963,7 +776,6 @@ function formatBytes(n: number): string {
   return `${n} B`
 }
 
-initVisual()
 onMounted(async () => {
   await refreshAll()
   // WAF 与 nginx 之间是"可选"关系：nginx 装了也未必有 WAF，状态各自独立
@@ -975,12 +787,15 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.nginx-page {
+  min-height: 60vh;
+}
 .nginx-pills {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   padding: 4px;
-  margin-bottom: 12px;
+  margin: 12px 0;
   background: var(--el-fill-color-light);
   border-radius: 10px;
 }
@@ -1050,41 +865,6 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* 可视化 */
-.visual-body {
-  padding: 4px 2px;
-}
-.visual-tip {
-  margin-bottom: 12px;
-}
-.field-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-  gap: 14px 28px;
-}
-.field-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--el-text-color-primary);
-  margin-bottom: 6px;
-}
-.field-ctrl {
-  width: 100%;
-}
-.field-tip {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  margin-top: 4px;
-  line-height: 1.5;
-}
-.save-row {
-  margin-top: 18px;
-  display: flex;
-  gap: 10px;
 }
 
 /* 文件编辑 */
@@ -1176,6 +956,15 @@ onUnmounted(() => {
   flex: 1;
   min-height: 460px;
 }
+.editor-tip {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  border-top: 1px solid var(--el-border-color-lighter);
+  line-height: 1.6;
+}
+
+/* WAF */
 .waf-blockers {
   max-width: 620px;
   margin: 0 auto 12px;
@@ -1195,7 +984,6 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
 }
-
 .waf-inline-tip {
   margin-left: 8px;
   font-size: 12px;
@@ -1252,13 +1040,6 @@ onUnmounted(() => {
   padding: 10px;
   white-space: pre-wrap;
   word-break: break-all;
-}
-.editor-tip {
-  padding: 6px 10px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  border-top: 1px solid var(--el-border-color-lighter);
-  line-height: 1.6;
 }
 
 /* 默认站点（IP 访问） */

@@ -68,7 +68,9 @@
       <el-tab-pane :label="t('statusNginx.tabCache')" name="cache">
         <div class="zone-toolbar">
           <span class="tip">{{ t('statusNginx.cacheTip') }}</span>
-          <el-button size="small" :icon="Plus" @click="addZone">{{ t('statusNginx.addZone') }}</el-button>
+          <el-button size="small" :icon="Plus" @click="addZone">{{
+            t('statusNginx.addZone')
+          }}</el-button>
         </div>
         <el-card v-for="(z, idx) in cacheZoneList" :key="idx" shadow="never" class="zone-card">
           <template #header>
@@ -126,7 +128,11 @@
             </el-form-item>
           </el-form>
         </el-card>
-        <el-empty v-if="!http.proxy_cache.length" :description="t('statusNginx.noZone')" :image-size="70" />
+        <el-empty
+          v-if="!http.proxy_cache.length"
+          :description="t('statusNginx.noZone')"
+          :image-size="70"
+        />
 
         <el-divider content-position="left">ngx cache purge</el-divider>
         <el-form label-width="190px" class="row-form">
@@ -134,21 +140,21 @@
             <el-switch v-model="http.cache_purge.enabled" />
           </el-form-item>
           <el-form-item :label="t('statusNginx.purgeIps')">
-            <el-select v-model="http.cache_purge.allowed_ips" multiple filterable allow-create default-first-option class="grow mono">
-              <el-option v-for="ip in http.cache_purge.allowed_ips" :key="ip" :label="ip" :value="ip" />
+            <el-select
+              v-model="http.cache_purge.allowed_ips"
+              multiple
+              filterable
+              allow-create
+              default-first-option
+              class="grow mono"
+            >
+              <el-option
+                v-for="ip in http.cache_purge.allowed_ips"
+                :key="ip"
+                :label="ip"
+                :value="ip"
+              />
             </el-select>
-          </el-form-item>
-        </el-form>
-      </el-tab-pane>
-
-      <!-- ── 安全 / ModSecurity ── -->
-      <el-tab-pane :label="t('statusNginx.tabSecurity')" name="sec">
-        <el-form label-width="230px" class="row-form">
-          <el-form-item label="modsecurity">
-            <TriBool v-model="http.security.modsecurity" />
-          </el-form-item>
-          <el-form-item label="modsecurity_rules_file">
-            <el-input v-model="http.security.modsecurity_rules_file" class="mono" />
           </el-form-item>
         </el-form>
       </el-tab-pane>
@@ -167,26 +173,62 @@
               allow-create
               default-first-option
               class="grow mono"
+              :placeholder="t('statusNginx.topIncludesPlaceholder')"
             >
               <el-option v-for="p in spec.top_includes || []" :key="p" :label="p" :value="p" />
             </el-select>
           </el-form-item>
         </el-form>
+
+        <el-divider content-position="left">{{ t('statusNginx.confDFiles') }}</el-divider>
+        <div class="tip mb-2">{{ t('statusNginx.confDFilesTip') }}</div>
+        <el-table v-if="confDFiles.length" :data="confDFiles" size="small" class="mono">
+          <el-table-column prop="name" :label="t('statusNginx.confDFiles')" />
+          <el-table-column :label="t('statusNginx.confDSize')" width="100">
+            <template #default="{ row }">{{ formatBytes(row.size) }}</template>
+          </el-table-column>
+          <el-table-column :label="t('statusNginx.confDModified')" width="160">
+            <template #default="{ row }">{{ fmtTime(row.mtime) }}</template>
+          </el-table-column>
+          <el-table-column width="120" align="right">
+            <template #default="{ row }">
+              <el-button link size="small" @click="openConfD(row)">
+                {{ t('statusNginx.view') }}
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-empty v-else :description="t('statusNginx.confDEmpty')" :image-size="60" />
+
         <el-divider content-position="left">{{ t('statusNginx.customRaw') }}</el-divider>
         <el-input v-model="http.custom_raw" type="textarea" :rows="6" class="mono" />
-        <el-divider content-position="left">{{ t('statusNginx.preserved') }}</el-divider>
-        <template v-if="preserved.length">
-          <el-tag v-for="(l, i) in preserved" :key="i" type="warning" class="preserved-tag mono">{{ l }}</el-tag>
-          <div class="tip mt-2">{{ t('statusNginx.preservedTip') }}</div>
-        </template>
-        <el-empty v-else :description="t('statusNginx.noPreserved')" :image-size="60" />
       </el-tab-pane>
+
+      <!-- conf.d 文件编辑弹窗 -->
+      <el-dialog
+        v-model="confDDialogVisible"
+        :title="editingFile?.name"
+        width="70%"
+        top="5vh"
+        destroy-on-close
+        :close-on-click-modal="false"
+      >
+        <el-input v-model="editingContent" type="textarea" :rows="24" class="mono" />
+        <template #footer>
+          <el-button @click="confDDialogVisible = false">{{ t('common.cancel') }}</el-button>
+          <el-button type="primary" :loading="savingConfD" @click="saveConfD">
+            {{ t('statusNginx.confDSave') }}
+          </el-button>
+        </template>
+      </el-dialog>
     </el-tabs>
 
     <!-- ── 操作栏 ── -->
     <div class="actions">
       <el-button :loading="previewing" @click="doPreview">{{ t('statusNginx.preview') }}</el-button>
-      <el-button type="primary" :loading="applying" @click="doApply">{{ t('statusNginx.apply') }}</el-button>
+      <el-button type="primary" :loading="applying" @click="doApply">{{
+        t('statusNginx.apply')
+      }}</el-button>
       <el-button @click="doAdopt">{{ t('statusNginx.adopt') }}</el-button>
       <el-button @click="loadRevisions">{{ t('statusNginx.history') }}</el-button>
     </div>
@@ -225,7 +267,9 @@
         </el-table-column>
         <el-table-column width="150">
           <template #default="{ row }">
-            <el-button link size="small" @click="viewRev(row.id)">{{ t('statusNginx.view') }}</el-button>
+            <el-button link size="small" @click="viewRev(row.id)">{{
+              t('statusNginx.view')
+            }}</el-button>
             <el-button link size="small" type="primary" @click="doRollback(row)">
               {{ t('statusNginx.rollback') }}
             </el-button>
@@ -246,16 +290,22 @@ import {
   applyNginxGlobal,
   getNginxGlobalRevision,
   getNginxGlobalSpec,
+  listNginxConfs,
   listNginxGlobalRevisions,
   previewNginxGlobal,
   putNginxGlobalSpec,
+  readNginxConf,
   rollbackNginxGlobal,
+  saveNginxConf,
+  type NginxConfContent,
+  type NginxConfFile,
   type NginxGlobalPreviewData,
   type NginxGlobalRevision,
   type NginxGlobalSpec,
 } from '@/api/serverNginx'
 import DirectiveRow from './DirectiveRow.vue'
 import TriBool from './TriBool.vue'
+import { formatBytes } from '@/utils/fmt'
 
 const { t } = useI18n()
 const CONF_D = 'conf.d/*.conf'
@@ -294,7 +344,12 @@ const MAIN_FIELDS: Field[] = [
   { key: 'worker_shutdown_timeout', label: 'worker_shutdown_timeout', type: 'text' },
   { key: 'timer_resolution', label: 'timer_resolution', type: 'text' },
   { key: 'pid', label: 'pid', type: 'text' },
-  { key: 'error_log', label: 'error_log', type: 'text', tip: '路径 + 级别，如 /var/log/nginx/error.log warn' },
+  {
+    key: 'error_log',
+    label: 'error_log',
+    type: 'text',
+    tip: '路径 + 级别，如 /var/log/nginx/error.log warn',
+  },
   { key: 'pcre_jit', label: 'pcre_jit', type: 'bool' },
 ]
 
@@ -317,7 +372,12 @@ const BASIC_FIELDS: Field[] = [
   { key: 'client_header_timeout', label: 'client_header_timeout', type: 'text' },
   { key: 'client_body_timeout', label: 'client_body_timeout', type: 'text' },
   { key: 'reset_timedout_connection', label: 'reset_timedout_connection', type: 'bool' },
-  { key: 'client_max_body_size', label: 'client_max_body_size', type: 'text', tip: '上传大小上限，如 100m' },
+  {
+    key: 'client_max_body_size',
+    label: 'client_max_body_size',
+    type: 'text',
+    tip: '上传大小上限，如 100m',
+  },
   { key: 'client_body_buffer_size', label: 'client_body_buffer_size', type: 'text' },
   { key: 'large_client_header_buffers', label: 'large_client_header_buffers', type: 'text' },
   { key: 'types_hash_max_size', label: 'types_hash_max_size', type: 'num' },
@@ -359,7 +419,7 @@ const LOG_FIELDS: Field[] = [
   { key: 'access_log', label: 'access_log', type: 'text', tip: 'off 关闭；可带 buffer/flush 参数' },
   { key: 'error_log', label: 'error_log', type: 'text' },
   { key: 'log_format_main', label: 'log_format main', type: 'area' },
-  { key: 'log_format_json', label: 'log_format json', type: 'area' },
+  { key: 'log_format_json', label: 'log_format json_combined', type: 'area' },
   { key: 'open_log_file_cache', label: 'open_log_file_cache', type: 'text' },
 ]
 
@@ -389,6 +449,13 @@ const previewData = ref<NginxGlobalPreviewData | null>(null)
 const revisions = ref<NginxGlobalRevision[]>([])
 const seeded = ref(false)
 
+// conf.d 文件列表与编辑弹窗
+const confDFiles = ref<NginxConfFile[]>([])
+const confDDialogVisible = ref(false)
+const editingFile = ref<NginxConfFile | null>(null)
+const editingContent = ref('')
+const savingConfD = ref(false)
+
 // 初始值也必须过 ensureShape：el-tabs 首帧就渲染全部 pane，
 // 若 http.security / proxy_cache 等缺壳，会在接口返回前直接抛 TypeError
 const spec = ref<NginxGlobalSpec>(
@@ -408,10 +475,6 @@ const general = computed(() => spec.value.general as Record<string, any>)
 const events = computed(() => spec.value.events as Record<string, any>)
 /** 缓存区列表（强类型迭代，避免 v-for 索引参与类型推导） */
 const cacheZoneList = computed(() => (http.value.proxy_cache || []) as CacheZone[])
-const preserved = computed(() => [
-  ...(spec.value.preserve_top_raw || []),
-  ...(spec.value.preserve_http_raw || []),
-])
 
 function ensureShape(s: NginxGlobalSpec) {
   // 后端返回的是 Option 结构，前端需要对象壳以免 v-model 崩
@@ -425,7 +488,6 @@ function ensureShape(s: NginxGlobalSpec) {
   h.proxy ??= {}
   h.proxy_cache ??= []
   h.cache_purge ??= { enabled: false, allowed_ips: [] }
-  h.security ??= {}
   h.custom_raw ??= ''
   s.load_modules ??= []
   s.top_includes ??= []
@@ -438,11 +500,52 @@ async function load() {
     const res = await getNginxGlobalSpec()
     spec.value = ensureShape(res.data.spec)
     seeded.value = res.data.seeded
+    await loadConfDFiles()
   } catch {
     // nginx 未安装 / 探测失败时不阻断本页渲染，退回空模型
     spec.value = ensureShape({ ver: 1 })
   } finally {
     loading.value = false
+  }
+}
+
+async function loadConfDFiles() {
+  try {
+    const res = await listNginxConfs()
+    const files = res.data.files || []
+    confDFiles.value = files.filter(
+      (f: NginxConfFile) => f.rel?.startsWith('conf.d/') && f.name?.endsWith('.conf') && !f.is_main,
+    )
+  } catch {
+    confDFiles.value = []
+  }
+}
+
+async function openConfD(file: NginxConfFile) {
+  try {
+    const res = await readNginxConf(file.path)
+    editingFile.value = file
+    editingContent.value = res.data.content
+    confDDialogVisible.value = true
+  } catch {
+    ElMessage.error(t('statusNginx.confDReadError'))
+  }
+}
+
+async function saveConfD() {
+  if (!editingFile.value) return
+  savingConfD.value = true
+  try {
+    const res = await saveNginxConf(editingFile.value.path, editingContent.value)
+    if (res.data.tested) {
+      ElMessage.success(t('statusNginx.confDSaveOk'))
+      confDDialogVisible.value = false
+      await loadConfDFiles()
+    } else {
+      ElMessage.error(res.data.reason || 'nginx -t failed')
+    }
+  } finally {
+    savingConfD.value = false
   }
 }
 
@@ -492,7 +595,9 @@ async function doApply() {
   applying.value = true
   try {
     const res = await applyNginxGlobal(spec.value)
-    ElMessage.success(res.data.reloaded ? t('statusNginx.applyOkReloaded') : t('statusNginx.applyOk'))
+    ElMessage.success(
+      res.data.reloaded ? t('statusNginx.applyOkReloaded') : t('statusNginx.applyOk'),
+    )
     previewData.value = null
   } finally {
     applying.value = false
@@ -525,7 +630,9 @@ async function viewRev(id: number) {
 
 async function doRollback(row: NginxGlobalRevision) {
   try {
-    await ElMessageBox.confirm(t('statusNginx.rollbackConfirm'), t('common.tip'), { type: 'warning' })
+    await ElMessageBox.confirm(t('statusNginx.rollbackConfirm'), t('common.tip'), {
+      type: 'warning',
+    })
   } catch {
     return
   }
@@ -596,13 +703,6 @@ onMounted(load)
 }
 .keep {
   color: var(--el-color-primary);
-}
-.preserved-tag {
-  display: block;
-  width: fit-content;
-  max-width: 100%;
-  margin-bottom: 4px;
-  white-space: pre-wrap;
 }
 .actions {
   display: flex;

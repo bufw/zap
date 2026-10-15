@@ -20,6 +20,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod config;
 mod db;
 mod routers;
+pub mod storage;
 pub mod zap;
 pub mod zapexec;
 

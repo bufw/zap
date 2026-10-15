@@ -2722,7 +2722,10 @@ fn vhost_sync_inner(cfg: SiteConfig) -> Result<Response, String> {
             let ldir = PathBuf::from(lr);
             std::fs::create_dir_all(&ldir).map_err(|e| format!("创建站点日志目录失败: {e}"))?;
             fix_tree_owner(&ldir, "www", true)?;
-            access_log = Some(ldir.join("access.log").to_string_lossy().to_string());
+            access_log = Some(format!(
+                "{} json_combined",
+                ldir.join("access.log").display()
+            ));
             error_log = Some(ldir.join("error.log").to_string_lossy().to_string());
             // WAF 独立审计日志：与 access/error 同目录，纳入面板轮转与查看
             waf_log = Some(ldir.join("waf.log").to_string_lossy().to_string());
@@ -3482,7 +3485,7 @@ mod tests {
             Some("/home/u/logs/b-7/error.log"),
         );
         assert!(s.contains("root /home/u/www/b-7;"));
-        assert!(s.contains("access_log /home/u/logs/b-7/access.log;"));
+        assert!(s.contains("access_log /home/u/logs/b-7/access.log json_combined;"));
         assert!(s.contains("error_log /home/u/logs/b-7/error.log;"));
     }
 

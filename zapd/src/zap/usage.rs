@@ -18,7 +18,8 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use chrono::Local;
+use chrono::{DateTime, Local};
+use serde_json::Value;
 use tokio::process::Command;
 use tracing::{debug, warn};
 
@@ -33,14 +34,14 @@ fn period_now() -> String {
 /// 单日 Top URL 保留条数（超出按 hits 修剪，避免表无限膨胀）
 const TOP_PATH_KEEP: i64 = 200;
 
-/// access.log 单行解析结果（均为行内切片，避免逐行分配）
-struct LineStat<'a> {
+/// access.log 单行解析结果。
+struct LineStat {
     /// 响应字节数（$body_bytes_sent）
     bytes: u64,
     /// 请求日期 YYYYMMDD（解析失败为空串）
     day: String,
     /// 请求路径（去掉 query string）
-    path: &'a str,
+    path: String,
 }
 
 /// nginx 时间字段 `15/Sep/2026:10:00:00` → `20260915`；解析失败返回空串。
@@ -71,15 +72,76 @@ fn day_of_nginx_time(t: &str) -> String {
     format!("{yyyy}{mm}{dd}")
 }
 
-/// 解析一行：`ip - - [time] "GET /path?x=1 HTTP/1.1" 200 1234 "ref" "ua"`
+/// 解析一行 access.log，支持两种格式：
+/// - 传统 combined / main：`ip - - [time] "GET /path?x=1 HTTP/1.1" 200 1234 "ref" "ua"`
+/// - JSON：`{"time":"2026-10-15T10:00:00+08:00","uri":"/path?x=1","status":200,"body_bytes_sent":1234,...}`
 ///
-/// 取请求行内的路径与结束引号后的第二个字段（`$body_bytes_sent`），
-/// 可容忍 referer / UA 中的空格；解析失败按 0 / 空值处理。
-fn parse_line(line: &str) -> LineStat<'_> {
+/// 解析失败按 0 / 空值处理。
+fn parse_line(line: &str) -> LineStat {
+    let trimmed = line.trim();
+    if trimmed.starts_with('{') {
+        parse_json_line(trimmed)
+    } else {
+        parse_main_line(trimmed)
+    }
+}
+
+fn parse_json_line(line: &str) -> LineStat {
     let mut stat = LineStat {
         bytes: 0,
         day: String::new(),
-        path: "",
+        path: String::new(),
+    };
+    let Ok(v) = serde_json::from_str::<Value>(line) else {
+        return stat;
+    };
+    let map = match v {
+        Value::Object(m) => m,
+        _ => return stat,
+    };
+    // 时间字段可能是 ISO8601（time / time_iso8601）或 nginx local 格式（time_local）
+    if let Some(t) = map
+        .get("time")
+        .or_else(|| map.get("time_iso8601"))
+        .and_then(|v| v.as_str())
+    {
+        stat.day = day_of_iso8601(t);
+    } else if let Some(t) = map.get("time_local").and_then(|v| v.as_str()) {
+        let t = t
+            .strip_prefix('[')
+            .unwrap_or(t)
+            .strip_suffix(']')
+            .unwrap_or(t);
+        stat.day = day_of_nginx_time(t);
+    }
+    // 路径字段可能是 uri（单独拆出）或 request（"METHOD /path HTTP/1.1"）
+    if let Some(uri) = map.get("uri").and_then(|v| v.as_str()) {
+        stat.path = match uri.find('?') {
+            Some(i) => uri[..i].to_string(),
+            None => uri.to_string(),
+        };
+    } else if let Some(req) = map.get("request").and_then(|v| v.as_str())
+        && let Some(p) = req.split_whitespace().nth(1)
+    {
+        stat.path = match p.find('?') {
+            Some(i) => p[..i].to_string(),
+            None => p.to_string(),
+        };
+    }
+    if let Some(b) = map.get("body_bytes_sent").and_then(|v| {
+        v.as_u64()
+            .or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))
+    }) {
+        stat.bytes = b;
+    }
+    stat
+}
+
+fn parse_main_line(line: &str) -> LineStat {
+    let mut stat = LineStat {
+        bytes: 0,
+        day: String::new(),
+        path: String::new(),
     };
     // 时间：[15/Sep/2026:10:00:00 +0800]
     if let (Some(s), Some(e)) = (line.find('['), line.find(']'))
@@ -100,8 +162,8 @@ fn parse_line(line: &str) -> LineStat<'_> {
     let _method = ri.next();
     if let Some(p) = ri.next() {
         stat.path = match p.find('?') {
-            Some(i) => &p[..i],
-            None => p,
+            Some(i) => p[..i].to_string(),
+            None => p.to_string(),
         };
     }
     // 请求行之后：status bytes "referer" ...
@@ -111,6 +173,14 @@ fn parse_line(line: &str) -> LineStat<'_> {
         stat.bytes = v.parse::<u64>().unwrap_or(0);
     }
     stat
+}
+
+/// ISO8601 / RFC3339 时间 → `YYYYMMDD`；解析失败返回空串。
+fn day_of_iso8601(t: &str) -> String {
+    DateTime::parse_from_rfc3339(t)
+        .or_else(|_| DateTime::parse_from_str(t, "%Y-%m-%dT%H:%M:%S%.f%:z"))
+        .map(|dt| dt.format("%Y%m%d").to_string())
+        .unwrap_or_default()
 }
 
 /// 站点流量采集游标（字段顺序与下方 SELECT 一一对应）
@@ -322,7 +392,7 @@ fn aggregate(path: &Path, offset: u64) -> std::io::Result<LogAgg> {
         if !stat.path.is_empty() {
             let e = agg
                 .paths
-                .entry((stat.day.clone(), stat.path.to_string()))
+                .entry((stat.day.clone(), stat.path.clone()))
                 .or_insert((0, 0));
             e.0 += 1;
             e.1 = e.1.saturating_add(stat.bytes);
@@ -551,5 +621,22 @@ mod tests {
         assert_eq!(day_of_nginx_time("15/Sep/2026:10:00:00"), "20260915");
         assert_eq!(day_of_nginx_time("9/Feb/2025:1:2:3"), "");
         assert_eq!(day_of_nginx_time("bad"), "");
+    }
+
+    #[test]
+    fn parses_json_line_fields() {
+        // json_combined 默认值格式：所有字段均为字符串，状态码 / 字节数带引号
+        let line = r#"{"time_local":"[15/Sep/2026:10:00:00 +0800]","remote_addr":"1.2.3.4","x_forwarded_for":"10.0.0.1","remote_user":"-","request":"GET /a/b?x=1 HTTP/1.1","status":"200","body_bytes_sent":"1234","request_time":"0.001","http_referrer":"-","http_user_agent":"Mozilla/5.0"}"#;
+        let s = parse_line(line);
+        assert_eq!(s.bytes, 1234);
+        assert_eq!(s.day, "20260915");
+        assert_eq!(s.path, "/a/b");
+
+        // 也兼容早期数字类型与独立 uri / time_iso8601 字段
+        let line2 = r#"{"time_iso8601":"2026-01-01T00:00:00Z","uri":"/p","status":404,"body_bytes_sent":"56"}"#;
+        let s2 = parse_line(line2);
+        assert_eq!(s2.bytes, 56);
+        assert_eq!(s2.day, "20260101");
+        assert_eq!(s2.path, "/p");
     }
 }

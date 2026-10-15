@@ -18,12 +18,13 @@ use axum::extract::{Extension, Query};
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::storage::nginx_conf as nginx_conf_storage;
 use crate::zap::ZapError;
 use crate::zap::ZapJsonResult;
 use crate::zap::audit;
 use crate::zap::jwt::ValidatedClaims;
 use crate::zap::jwt::is_admin;
-use zap_proto::Request;
+use zap_proto::{NGINX_LOG_FORMAT_JSON, NginxGlobalSpec, Request};
 
 fn require_admin(claims: &ValidatedClaims) -> Result<(), ZapError> {
     if is_admin(claims) {
@@ -213,14 +214,13 @@ pub async fn nginx_default_vhost(
 
 // ── 主配置可视化（结构模型 → 全量渲染 nginx.conf）────────────────
 //
-// 模型落在 SQLite `nginx_conf`（单行），nginx.conf 是渲染产物。
+// 模型不再进数据库，落在 `{ZAP_PATH}/data/conf/nginx/nginx_conf.yaml`；
+// 历史版本在 `data/conf/nginx/revisions/`。nginx.conf 本身是渲染产物、在磁盘。
 // 首次读取无记录时向执行端索取：`nginx.global_spec` 会解析现有 nginx.conf
 // 回填模型（识别不了的行进 preserve_*_raw），取不到就用面板默认模型。
 
 use axum::extract::Path;
 use serde_json::Value;
-
-use crate::db;
 
 /// 执行一次 zapexec 请求并返回 data（失败保留原始 message）。
 async fn exec_data(req: Request) -> Result<Value, ZapError> {
@@ -231,37 +231,31 @@ async fn exec_data(req: Request) -> Result<Value, ZapError> {
     Ok(resp.data.unwrap_or(Value::Null))
 }
 
-fn now_ts() -> i64 {
-    chrono::Local::now().timestamp()
-}
-
-/// 落库模型（草稿 / 接管回填共用）。
+/// 持久化模型（草稿 / 接管回填共用），改为 `{ZAP_PATH}/data/nginx/nginx_conf.yaml`。
 async fn save_spec(spec: &Value) -> Result<(), ZapError> {
-    let pool = db::get_db_pool().await;
-    let text = serde_json::to_string(spec).unwrap_or_else(|_| "{}".to_string());
-    let ver = spec.get("ver").and_then(|v| v.as_i64()).unwrap_or(1);
-    sqlx::query(
-        "INSERT INTO nginx_conf (id, spec, ver, adopted, updated_at) \
-         VALUES (1, ?, ?, 1, ?) \
-         ON CONFLICT(id) DO UPDATE SET spec = excluded.spec, ver = excluded.ver, \
-         updated_at = excluded.updated_at",
-    )
-    .bind(&text)
-    .bind(ver)
-    .bind(now_ts())
-    .execute(pool)
-    .await?;
-    Ok(())
+    nginx_conf_storage::write_spec(spec).await
 }
 
-/// 读取模型；无记录时按现有 nginx.conf（或默认值）生成一份入库。
+/// 读取模型；无文件时按现有 nginx.conf（或默认值）生成一份写入文件。
 async fn load_or_seed_spec() -> Result<(Value, bool), ZapError> {
-    let pool = db::get_db_pool().await;
-    let row: Option<(String,)> = sqlx::query_as("SELECT spec FROM nginx_conf WHERE id = 1")
-        .fetch_optional(pool)
-        .await?;
-    if let Some((raw,)) = row {
-        let spec: Value = serde_json::from_str(&raw).unwrap_or_else(|_| json!({}));
+    if let Some(spec) = nginx_conf_storage::read_spec().await? {
+        // 已有草稿文件若缺少 JSON log_format，补入默认值并持久化
+        let mut spec_obj: NginxGlobalSpec =
+            serde_json::from_value(spec.clone()).unwrap_or_default();
+        if spec_obj
+            .http
+            .logging
+            .log_format_json
+            .as_deref()
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(true)
+        {
+            spec_obj.http.logging.log_format_json = Some(NGINX_LOG_FORMAT_JSON.to_string());
+            let normalized = serde_json::to_value(&spec_obj)
+                .map_err(|e| ZapError::New(-1, format!("模型序列化失败: {e}")))?;
+            save_spec(&normalized).await?;
+            return Ok((normalized, false));
+        }
         return Ok((spec, false));
     }
     let d = exec_data(Request::NginxGlobalSpec).await?;
@@ -326,16 +320,8 @@ pub async fn nginx_global_apply(
     let spec_json = serde_json::to_string(&body.spec).unwrap_or_else(|_| "{}".to_string());
     let result = exec_data(Request::NginxGlobalApply { spec_json }).await;
     if let Ok(d) = &result {
-        let pool = db::get_db_pool().await;
         let content = d.get("content").and_then(|v| v.as_str()).unwrap_or("");
-        let _ = sqlx::query(
-            "INSERT INTO nginx_conf_revision (content, actor, ok, created_at) VALUES (?, ?, 1, ?)",
-        )
-        .bind(content)
-        .bind(claims.sub.clone())
-        .bind(now_ts())
-        .execute(pool)
-        .await;
+        let _ = nginx_conf_storage::save_revision(content, &claims.sub, true).await;
         save_spec(&body.spec).await?;
         audit::log(
             Some(&claims),
@@ -375,17 +361,10 @@ pub async fn nginx_global_adopt(
 /// GET /system/nginx/global/revisions
 pub async fn nginx_global_revisions(claims: ValidatedClaims) -> ZapJsonResult {
     require_admin(&claims)?;
-    let pool = db::get_db_pool().await;
-    let rows: Vec<(i64, String, i64, i64)> = sqlx::query_as(
-        "SELECT id, actor, ok, created_at FROM nginx_conf_revision ORDER BY id DESC LIMIT 30",
-    )
-    .fetch_all(pool)
-    .await?;
+    let rows = nginx_conf_storage::list_revisions().await?;
     let items: Vec<Value> = rows
         .into_iter()
-        .map(|(id, actor, ok, created_at)| {
-            json!({ "id": id, "actor": actor, "ok": ok == 1, "created_at": created_at })
-        })
+        .map(|m| json!({ "id": m.id, "actor": m.actor, "ok": m.ok, "created_at": m.created_at }))
         .collect();
     Ok(Json(
         json!({ "code": 0, "message": "ok", "data": { "items": items } }),
@@ -398,15 +377,9 @@ pub async fn nginx_global_revision_get(
     Path(id): Path<i64>,
 ) -> ZapJsonResult {
     require_admin(&claims)?;
-    let pool = db::get_db_pool().await;
-    let row: Option<(String,)> =
-        sqlx::query_as("SELECT content FROM nginx_conf_revision WHERE id = ?")
-            .bind(id)
-            .fetch_optional(pool)
-            .await?;
-    let Some((content,)) = row else {
-        return Err(ZapError::New(-1, "该历史版本不存在".to_string()));
-    };
+    let content = nginx_conf_storage::get_revision(id)
+        .await?
+        .ok_or_else(|| ZapError::New(-1, "该历史版本不存在".to_string()))?;
     Ok(Json(
         json!({ "code": 0, "message": "ok", "data": { "content": content } }),
     ))
@@ -426,15 +399,9 @@ pub async fn nginx_global_rollback(
     Json(body): Json<NginxRevisionRollbackBody>,
 ) -> ZapJsonResult {
     require_admin(&claims)?;
-    let pool = db::get_db_pool().await;
-    let row: Option<(String,)> =
-        sqlx::query_as("SELECT content FROM nginx_conf_revision WHERE id = ?")
-            .bind(body.id)
-            .fetch_optional(pool)
-            .await?;
-    let Some((content,)) = row else {
-        return Err(ZapError::New(-1, "该历史版本不存在".to_string()));
-    };
+    let content = nginx_conf_storage::get_revision(body.id)
+        .await?
+        .ok_or_else(|| ZapError::New(-1, "该历史版本不存在".to_string()))?;
     let status = exec_data(Request::NginxStatus).await?;
     let Some(conf) = status.get("conf_file").and_then(|v| v.as_str()) else {
         return Err(ZapError::New(-1, "未探测到 Nginx 主配置路径".to_string()));
