@@ -3481,7 +3481,7 @@ mod tests {
             &["b.com".into()],
             "/home/u/www/b-7",
             None,
-            Some("/home/u/logs/b-7/access.log"),
+            Some("/home/u/logs/b-7/access.log json_combined"),
             Some("/home/u/logs/b-7/error.log"),
         );
         assert!(s.contains("root /home/u/www/b-7;"));
