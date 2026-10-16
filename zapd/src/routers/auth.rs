@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::extract::Query;
 use axum::http::{HeaderMap, HeaderValue, header};
@@ -32,6 +32,15 @@ pub const SESSION_COOKIE: &str = "zap_token";
 /// 用户登录一小时后新开标签页时 Cookie 已过期（浏览器不再发送），
 /// 就会被提示「需要登录」。`/webapps/*` 每次成功访问都会滑动续期。
 pub const WEBAPP_SESSION_SECS: u64 = 24 * 3600;
+
+/// 会话绝对有效期上限（刷新令牌的总寿命封顶）。
+///
+/// access_token / Web 应用 Cookie 每次刷新都把 `exp` 重置为 `now + 有效期`，
+/// 若不封顶，用户只要持续活动，会话就能无限滑动续期（刷新令牌永不失效）。
+/// 这里以**会话原始签发时间 `iat`** 为锚（见 [`zap::jwt::refresh_jwt_token`]），
+/// 任何刷新得到的 `exp` 不得超过 `iat + MAX_SESSION_ABS_SECS`；超过后刷新被拒，
+/// 必须重新登录。默认 7 天。
+pub const MAX_SESSION_ABS_SECS: u64 = 7 * 24 * 3600;
 
 /// 生成会话 Cookie（HttpOnly + SameSite=Lax，有效期与 Cookie 内 JWT 一致）。
 pub fn session_cookie(token: &str) -> HeaderMap {
@@ -333,7 +342,13 @@ pub async fn login(
     ))
 }
 
-pub async fn logout() -> Result<(HeaderMap, Json<serde_json::Value>), ZapError> {
+pub async fn logout(
+    claims: ValidatedClaims,
+) -> Result<(HeaderMap, Json<serde_json::Value>), ZapError> {
+    // 登出即让当前凭据失效：JWT 是无状态的，无法单条吊销，只能把会话版本号 +1，
+    // 使已签发的面板 token、Web 应用 Cookie、静态 API Token 在下次请求时一律判为已下线。
+    // 浏览器 Cookie 由 clear_session_cookie 清除；当前设备同样被踢出（登出即退出）。
+    let _ = session::bump(claims.id as i64).await;
     Ok((
         clear_session_cookie(),
         Json(json!({
@@ -506,23 +521,43 @@ pub async fn change_password(
 pub async fn reflash_token(
     claims: zap::jwt::Claims,
 ) -> Result<(HeaderMap, Json<serde_json::Value>), ZapError> {
-    // 页面会话（长有效期）先算好：claims 随后会被 move 进 JWT 生成
-    let cookie_token = webapp_session_token(claims.sub.clone(), claims.id, &claims.roles);
-    if let Ok(token) = zap::jwt::generate_jwt_token(claims.sub, claims.id, &claims.roles) {
-        let cookie = cookie_token.unwrap_or_else(|| token.clone());
-        let headers = session_cookie(&cookie);
-        return Ok((
-            headers,
-            Json(json!({
-                "code": 0,
-                "access_token": token,
-                "token_type": "Bearer",
-                "message": "刷新成功",
-                "expire_in": crate::config::get_config().read().unwrap().jwt.jwt_expire
-            })),
+    // 绝对有效期上限：以会话原始签发时间 `iat` 为锚，刷新不能让会话无限滑动续期。
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let abs_exp = claims.iat.saturating_add(MAX_SESSION_ABS_SECS);
+    if now >= abs_exp {
+        // 超过绝对上限：拒绝刷新，必须重新登录
+        return Err(ZapError::Key(
+            -1,
+            "api.auth.sessionExpired".to_string(),
+            "会话已过期，请重新登录".to_string(),
         ));
     }
-    Err(ZapError::New(-1, "刷新失败".to_string()))
+    // 本次 refreshed 凭据的有效期不得超过「剩余绝对寿命」
+    let remain = abs_exp - now;
+    let jwt_expire = crate::config::get_config().read().unwrap().jwt.jwt_expire;
+    let access_expire = remain.min(jwt_expire);
+    let webapp_expire = remain.min(WEBAPP_SESSION_SECS);
+
+    // refresh_jwt_token 保留原始 iat（锚点），否则每次刷新都把上限往后推
+    let token = zap::jwt::refresh_jwt_token(&claims, access_expire)
+        .map_err(|_| ZapError::New(-1, "Token 生成失败".to_string()))?;
+    let cookie_token =
+        zap::jwt::refresh_jwt_token(&claims, webapp_expire).unwrap_or_else(|_| token.clone());
+
+    let headers = session_cookie(&cookie_token);
+    Ok((
+        headers,
+        Json(json!({
+            "code": 0,
+            "access_token": token,
+            "token_type": "Bearer",
+            "message": "刷新成功",
+            "expire_in": access_expire
+        })),
+    ))
 }
 
 // ── TOTP 2FA ────────────────────────────────────────────────
