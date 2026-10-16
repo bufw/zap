@@ -110,6 +110,34 @@ pub fn generate_jwt_token_with_expire(
     )
 }
 
+/// 刷新签发：保留传入 Claims 的 `iat` 作为会话锚点。
+///
+/// 普通 [`generate_jwt_token_with_expire`] 每次都把 `iat` 设为「当前时间」，若用于刷新，
+/// 「绝对有效期上限」会随每次刷新被不断重置，等于没有上限。这里显式复用原始 `iat`，
+/// 让 [`crate::routers::auth::MAX_SESSION_ABS_SECS`] 的封顶真正生效（会话寿命从首次登录起算）。
+pub fn refresh_jwt_token(orig: &Claims, expire: u64) -> Result<String, Error> {
+    let now_secs = time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let claims = Claims {
+        iat: orig.iat,
+        sub: orig.sub.clone(),
+        iss: "Zap".to_string(),
+        id: orig.id,
+        exp: now_secs + expire,
+        roles: orig.roles.clone(),
+        token_version: crate::zap::session::version_of(orig.id),
+        scope: orig.scope.clone(),
+    };
+    let secure_key = &config::get_config().read().unwrap().jwt.jwt_secure;
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secure_key.as_ref()),
+    )
+}
+
 /// 凭据作用域：一次性终端票据（v3 一键 SSH，由**被控端自己**签发）。
 ///
 /// 带这个 scope 的 token 只能访问终端 WebSocket，见 `access::guard`。
